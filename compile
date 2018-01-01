@@ -1,0 +1,8 @@
+#!/usr/bin/env clisp
+
+(load "~/.clisprc.lisp")
+(ql:quickload "asdf")
+(ql:quickload "phalanx")
+(in-package :phalanx)
+(make-exec)
+(ext:exit)
