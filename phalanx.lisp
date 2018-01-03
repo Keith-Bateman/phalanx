@@ -80,7 +80,7 @@
   ((blocks :initarg :blocks :accessor blocks-p)
    (blocks-sight :initform t :initarg :blocks-sight :accessor blocks-sight-p)
    (lit :initform nil :accessor lit)
-   (explored :initform t :accessor explored-p)))
+   (explored :initform nil :accessor explored-p)))
 
 (init-print tile '(blocks blocks-sight lit explored))
 
@@ -96,6 +96,8 @@
 
 (init-print obj '(x y char name color blocks blocks-sight pickup))
 
+;; list of roman enemies '(gladiator slave hun visigoth persian goth vandal carthaginian greek)
+;; list of fantastical enemies '()
 (defclass monster (obj)
   ((hp :initarg :hp :accessor get-hp)
    (max-hp :accessor get-max-hp)
@@ -108,6 +110,74 @@
   (when (slot-boundp mon 'hp)
 	(setf (get-max-hp mon) (get-hp mon))))
 
+(defmethod take-turn ((mon monster))
+  (funcall (coerce (get-ai mon) 'function) mon))
+
+(defmethod kill-monster ((mon monster))
+  (funcall (coerce (get-death mon) 'function) mon))
+
+(defmethod basic-ai ((mon monster))
+  (cond ((not (or (can-see-p mon (get-p1 *player*))
+				  (can-see-p mon (get-p2 *player*))))
+		 ;; Wander
+		 (move-mon mon (- (random 3) 1) (- (random 3) 1)) ; Something like this, but really we'd prefer to have the monster explore the dungeon and remember where things are (like the player)
+		 )
+		((<= (get-hp mon) (/ (max-hp mon) 5))
+		 (let ((map (dijkstra-map (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+								  (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))))
+		   (dotimes (x (- *screen-width* 1))
+			 (dotimes (y (- *screen-height* 1))
+			   (when (aref map x y)
+				 (setf (aref map x y) (* (aref map x y) -1.2)))))
+		   (let ((path (dijkstra-path map (cons (get-x mon) (get-y mon)))))
+			 (move-mon mon (- (car path) (get-x mon)) (- (cdr path) (get-y mon)))))
+		 ;; PANIC. Run away
+		 t)
+		((and (> (length (points (make-instance 'line :x1 (get-x mon) :y1 (get-y mon)
+												:x2 (get-x (get-p1 *player*)) :y2 (get-y (get-p1 *player*))))) 2)
+			  (> (length (points (make-instance 'line :x1 (get-x mon) :y1 (get-y mon)
+												:x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))) 2)
+			  (not (null (dijkstra-path (dijkstra-map (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+													  (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
+										(cons (get-x mon) (get-y mon))))))
+		 (let ((path (dijkstra-path (dijkstra-map (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+												  (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
+									(cons (get-x mon) (get-y mon)))))
+		   (move-mon mon (- (car path) (get-x mon)) (- (cdr path) (get-y mon)))
+		 ;; Chase
+		   t))
+		(t
+		 (attack mon *player*) ; Attack
+		 )))
+
+(defmethod basic-death ((mon monster))
+  (setf (get-char mon) #\%)
+  (setf (get-ai mon) '(lambda (mon) t))
+  (setf (blocks-p mon) nil)
+  (format-message ("~A dies a horrible and painful death" (get-name mon)) :color :cred))
+
+(defmethod player-death ((mon monster))
+  (setf (get-char mon) #\%)
+  (setf *game-state* nil)
+  (message "You die a lonely and depressing death" :color :cred))
+
+(defmethod can-see-p ((mon-looking monster) (mon-looked-at monster))
+  (member (cons (get-x mon-looked-at) (get-y mon-looked-at))
+		  (get-sight-line (make-instance 'line :x1 (get-x mon-looking) :y1 (get-y mon-looking)
+										 :x2 (get-x mon-looked-at) :y2 (get-y mon-looked-at)))
+		  :test #'equal))
+
+(defmethod attack ((attacker monster) (defender monster))
+  "Have the attacker monster perform an attack on the defender monster"
+  ;; FIXME: overly simplistic, although it works for a test
+  (let ((hit-p (< (random 1.0) (/ (atk attacker) (+ (atk attacker) (def defender)))))
+		(damage (+ (random 3) (round (/ (atk attacker) (def defender))))))
+	(cond (hit-p (format-message ("~A attacks ~A for ~A damage!" (get-name attacker) (get-name defender) damage) :color :cred)
+				 (setf (get-hp defender) (- (get-hp defender) damage))
+				 (if (<= (get-hp defender) 0)
+					 (kill-monster defender)))
+		  (t (format-message ("~A lunges at ~A and misses!" (get-name attacker) (get-name defender)) :color :cred)))))
+
 (defmethod move-mon ((mon monster) dx dy)
   (setf (get-x mon) (+ (get-x mon) dx))
   (setf (get-y mon) (+ (get-y mon) dy)))
@@ -117,21 +187,23 @@
 (defclass half-player (monster)
   ((inventory :initform nil :initarg :inv :accessor get-inv)))
 
-(init-print half-player '(x y char name color blocks blocks-sight pickup hp max-hp attack defense ai death inventory))
+(init-print half-player '(x y color blocks blocks-sight pickup inventory))
 
-(defclass player ()
+;; NOTE: This gets quite complicated because of the restrictions of an object system
+(defclass player (monster)
   ((p1 :initform (make-instance 'half-player) :initarg :p1 :accessor get-p1)
    (p2 :initform (make-instance 'half-player) :initarg :p2 :accessor get-p2)
    (name :initform (gen-roman-name) :accessor get-name)))
 
-(init-print player '(p1 p2 name))
+(init-print player '(p1 p2 name x y hp max-hp attack defense ai death))
 
 (defun move-player (dx dy)
   "Moves the player if possible"
   (when (and (not (blocked-p (+ (get-x (get-p1 *player*)) dx) (+ (get-y (get-p1 *player*)) dy)))
 			 (not (blocked-p (+ (get-x (get-p2 *player*)) dx) (+ (get-y (get-p2 *player*)) dy))))
 	(move-mon (get-p1 *player*) dx dy)
-	(move-mon (get-p2 *player*) dx dy)))
+	(move-mon (get-p2 *player*) dx dy)
+	(fov-calculate)))
 
 (defun separate-player ()
   "Moves the player units farther apart if possible"
@@ -153,7 +225,8 @@
 	(when (and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
 			 (not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
 	  (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-	  (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir)))))
+	  (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+	  (fov-calculate))))
 
 (defun gather-player ()
   "Moves the player units closer together if possible"
@@ -179,7 +252,8 @@
 				   (not (= (+ (get-y (get-p1 *player*)) (cdr p1-dir))
 						   (+ (get-y (get-p2 *player*)) (cdr p2-dir))))))
 	  (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-	  (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir)))))
+	  (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+	  (fov-calculate))))
 
 (defun rotate-player (direction)
   "Rotate player in a clockwise or counter direction"
@@ -224,7 +298,8 @@
 			 (when (and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
 						(not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
 			   (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-			   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir)))))
+			   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+			   (fov-calculate))))
 		  ((eq direction 'counter)
 (let ((p1-dir (let* ((pts (wall-points (find-rect (center ln) (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*))) 1)))
 								(subsequent (member (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
@@ -249,7 +324,8 @@
 			 (when (and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
 						(not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
 			   (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-			   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir)))))
+			   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+			   (fov-calculate))))
 		  (t
 		   (error "Improper direction ~A" direction)))))
 
@@ -414,6 +490,38 @@
 (defmethod center ((ln line))
   (cons (round (/ (+ (get-x1 ln) (get-x2 ln)) 2)) (round (/ (+ (get-y1 ln) (get-y2 ln)) 2))))
 
+(defmethod get-sight-line ((ln line))
+  (let ((sight-points nil))
+	(dolist (pt (points ln) sight-points)
+	  (setf sight-points (cons pt sight-points))
+	  (when (sight-blocked-p (car pt) (cdr pt))
+		(return sight-points)))))
+
+(defmethod see-along ((ln line))
+  (dolist (pt (get-sight-line ln))
+	(when (not (null pt))
+	  (setf (lit (aref *map* (car pt) (cdr pt))) t)
+	  (when (not (explored-p (aref *map* (car pt) (cdr pt))))
+		(setf (explored-p (aref *map* (car pt) (cdr pt))) t))))
+  ;; (dolist (pt (points ln))
+  ;; 	(setf (lit (aref *map* (car pt) (cdr pt))) t)
+  ;; 	(when (not (explored-p (aref *map* (car pt) (cdr pt))))
+  ;; 	  (setf (explored-p (aref *map* (car pt) (cdr pt))) t))
+  ;; 	(when (member t (cons (blocks-sight-p (aref *map* (car pt) (cdr pt)))
+  ;; 						  (mapcar #'blocks-sight-p
+  ;; 								  (remove-if-not (lambda (obj) (and (= (get-x obj) (car pt))
+  ;; 																	(= (get-y obj) (cdr pt))))
+  ;; 												 *objects*))))
+  ;; 	  (return t)))
+  )
+
+
+(defclass message ()
+  ((color :initarg :color :accessor get-color)
+   (str :initarg :str :accessor get-string)))
+
+(init-print message '(color str))
+
 ;;; Globals
 
 (defconstant *screen-width* 50)
@@ -424,13 +532,22 @@
 
 (defconstant *max-iterations* 3)
 
+(defconstant *fov-radius* 5)
+
 (defparameter *map* (make-array (list *screen-width* *screen-height*)))
 
 (defparameter *objects* nil)
 
+(defparameter *game-state* nil)
+
+(defparameter *messages* nil)
+
 (defparameter *player* (make-instance 'player
-									  :p1 (make-instance 'half-player :x 10 :y 10)
-									  :p2 (make-instance 'half-player :x 12 :y 10)))
+									  :p1 (make-instance 'half-player :x 10 :y 10 :blocks-sight nil)
+									  :p2 (make-instance 'half-player :x 12 :y 10 :blocks-sight nil)
+									  :hp 10
+									  :atk 5
+									  :def 5))
 
 ;;; Map Functions
 
@@ -476,16 +593,20 @@
 	  (dolist (l lines)
 		(draw l)))
 	
-	(direct-dungeon :windyness (random 100) :roughness (random 50) :complexity 1))
+	(direct-dungeon :windyness (random 100) :roughness (random 50) :complexity 1)
 
-  (big-open-level)
+	;;Generate pillars
+	(dotimes (i (+ 30 (random 40)))
+	  (setf (aref *map*
+				  (+ 2 (random (- *screen-width* 5)))
+				  (+ 2 (random (- *screen-height* 5))))
+			(make-instance 'tile :blocks t))))
 
-  ;;Generate pillars
-  (dotimes (i (+ 30 (random 40)))
-  	(setf (aref *map*
-  				(+ 2 (random (- *screen-width* 5)))
-  				(+ 2 (random (- *screen-height* 5))))
-  		  (make-instance 'tile :blocks t))))
+  (defun two-corridor-level ()
+	;; TODO: This will be a level with two separate corridors, forcing the player to split his force
+	(direct-dungeon :windyness (random 20) :roughness (random 20) :complexity 2))
+
+  (big-open-level))
 
 (defun get-random-rect (x y width height)
   "Get a random rectangle within the \"dungeon\" rectangle defined by x y width height"
@@ -610,7 +731,9 @@
 					(let ((adjacent-walls (count t (mapcar (lambda (pt)
 															 (blocks-p (aref *map* (car pt) (cdr pt))))
 														   (points-within 1 (cons x y))))))
-					  (setf (aref new-map x y) (make-instance 'tile :blocks (>= adjacent-walls 5))))))
+					  (setf (aref new-map x y) (make-instance 'tile
+															  :blocks (>= adjacent-walls 5)
+															  :blocks-sight (>= adjacent-walls 5))))))
 	(setf *map* new-map))
   (when (> iterations 1)
 	(smooth-dungeon (- iterations 1))))
@@ -647,9 +770,8 @@
 (defun render-objects ()
   "Renders every object in the *objects* list; usually called after the function render-map"
   (dolist (obj *objects*)
-	(when (or t
-			  (lit (aref *map* (get-x obj) (get-y obj)))
-			  (and (instance-of-p obj 'door)
+	(when (or (lit (aref *map* (get-x obj) (get-y obj)))
+			  (and (or (string= (get-name obj) "downstair") (string= (get-name obj) "upstair"))
 				   (explored-p (aref *map* (get-x obj) (get-y obj)))))
 	  (attron (slot-value obj 'color))
 	  (mvaddch (get-y obj) (get-x obj) (slot-value obj 'char))
@@ -668,24 +790,164 @@
 	(mvaddch y2 x2 #\@)
 	(move (cdr cen) (car cen))))
 
-;; (defun render-messages ()
-;;   (when (not (null (car *messages*)))
-;; 	(let* ((mess (car *messages*))
-;; 		   (color (get-color mess))
-;; 		   (str (get-string mess)))
-;; 	  (attron color)
-;; 	  (mvprintw (+ *screen-height* 1) 0 (make-string *screen-width* :initial-element #\Space)) ; Clear message line
-;; 	  (mvprintw (+ *screen-height* 1) 0 str)
-;; 	  (Attroff color))))
+(defun render-messages ()
+  (when (not (null (car *messages*)))
+	(let* ((mess (car *messages*))
+		   (color (get-color mess))
+		   (str (get-string mess)))
+	  (attron color)
+	  (mvprintw (+ *screen-height* 3) 0 (make-string *screen-width* :initial-element #\Space)) ; Clear message line 3
+	  (mvprintw (+ *screen-height* 3) 0 str)
+	  (Attroff color))
+	(when (not (null (cadr *messages*)))
+	  (let* ((mess (cadr *messages*))
+			 (color (get-color mess))
+			 (str (get-string mess)))
+		(attron color)
+		(mvprintw (+ *screen-height* 2) 0 (make-string *screen-width* :initial-element #\Space)) ; Clear message line 2
+		(mvprintw (+ *screen-height* 2) 0 str)
+		(Attroff color))
+	  (when (not (null (caddr *messages*)))
+		(let* ((mess (caddr *messages*))
+			   (color (get-color mess))
+			   (str (get-string mess)))
+		  (attron color)
+		  (mvprintw (+ *screen-height* 1) 0 (make-string *screen-width* :initial-element #\Space)) ; Clear message line 1
+		  (mvprintw (+ *screen-height* 1) 0 str)
+		  (Attroff color))))))
 
 (defun render-all ()
-  ;; (fov-calculate)
+  (fov-calculate)
   (render-map)
   (render-objects)
+  (render-messages)
+  (stats)
   (render-player)
-  ;; (render-messages)
-  ;; (stats)
   (refresh))
+
+;;; Pathfinding
+
+(defun dijkstra-map (&rest sources)
+  (defun dmap (source &optional (default 0))
+	(let ((path-lengths (make-array (list *screen-width* *screen-height*))) (last source) (known (list (cons (car source) (cdr source)))) selectable)
+	  (setf (aref path-lengths (car source) (cdr source)) default)
+	  (dostep (x (- (car source) 1) (+ (car source) 1))
+			  (dostep (y (- (cdr source) 1) (+ (cdr source) 1))
+					  (when (and (not (member (cons x y) known :test #'equal))
+								 (not (blocked-p x y)))
+						(setf (aref path-lengths x y) 1)
+						(setf selectable (cons (cons x y) selectable)))))
+	  (while selectable
+		(let* ((min-len (reduce #'min
+								(mapcar
+								 (lambda (x) (aref path-lengths (car x) (cdr x)))
+								 (remove-if-not #'identity selectable))))
+			   (selected (random-list (remove-if-not
+									   (lambda (x) (= (aref path-lengths (car x) (cdr x)) min-len))
+									   selectable))))
+		  (setf selectable (delete selected selectable :test #'equal))
+		  (dostep (x (- (car selected) 1) (+ (car selected) 1))
+			(dostep (y (- (cdr selected) 1) (+ (cdr selected) 1))
+					(when (and (not (member (cons x y) known :test #'equal))
+							   (not (blocked-p x y))
+							   (not (and (= x (car selected)) (= y (cdr selected)))))
+					  (if (not (aref path-lengths x y))
+						  (setf (aref path-lengths x y) (+ (aref path-lengths (car selected) (cdr selected)) 1))
+						  (setf (aref path-lengths x y) (min (+ (aref path-lengths (car selected) (cdr selected)) 1) (aref path-lengths x y))))
+					  (setf selectable (cons (cons x y) selectable)))))
+		  (setf last selected)
+		  (setf known (cons selected known))))
+	  path-lengths))
+  
+  (let ((map (make-array (list *screen-width* *screen-height*))))
+  	(dolist (src sources)
+  	  (let ((temp (dmap src)))
+  		(dotimes (x (- *screen-width* 1))
+  		  (dotimes (y (- *screen-height* 1))
+  			(cond ((null (aref map x y))
+  				   (setf (aref map x y) (aref temp x y)))
+  				  ((null (aref temp x y))
+  				   nil)
+  				  ((< (aref temp x y) (aref map x y))
+  				   (setf (aref map x y) (aref temp x y))))))))
+  	map))
+
+(defun dijkstra-path (dmap start)
+  (let* ((allowed-point-vals (remove-if-not #'identity
+											(mapcar (lambda (x) (aref dmap (car x) (cdr x)))
+													(points-around start))))
+		 (min-points 
+		  (if (null allowed-point-vals)
+			  nil
+			  (remove-if-not (lambda (x) (eq (aref dmap (car x) (cdr x))
+											 (reduce #'min allowed-point-vals)))
+					 (points-around start)))))
+	(if (null min-points)
+		nil
+		(random-list min-points))))
+
+;;; FOV
+
+(defun fov-calculate ()
+  (defun fov-reset ()
+	(dostep (x 0 (- *screen-width* 1))
+			(dostep (y 0 (- *screen-height* 1))
+					(setf (lit (aref *map* x y)) nil))))
+  (fov-reset)
+  
+  ;; HAKMEM 149 circle drawing for choice of rays
+  (let ((x *fov-radius*) (y *fov-radius*) (e 0.1))
+  	(dotimes (i 100)
+  		(see-along (make-instance 'line :x1 (get-x (get-p1 *player*)) :y1 (get-y (get-p1 *player*))
+  								  :x2 (cond ((>= (+ (get-x (get-p1 *player*)) (round x)) *screen-width*)
+  											 (- *screen-width* 1))
+  											((< (+ (get-x (get-p1 *player*)) (round x)) 0)
+  											 0)
+  											(t
+  											 (+ (get-x (get-p1 *player*)) (round x))))
+  								  :y2 (cond ((>= (+ (get-y (get-p1 *player*)) (round y)) *screen-height*)
+  											 (- *screen-height* 1))
+  											((< (+ (get-y (get-p1 *player*)) (round y)) 0)
+  											 0)
+  											(t
+  											 (+ (get-y (get-p1 *player*)) (round y))))))
+  		(see-along (make-instance 'line :x1 (get-x (get-p2 *player*)) :y1 (get-y (get-p2 *player*))
+  								  :x2 (cond ((>= (+ (get-x (get-p2 *player*)) (round x)) *screen-width*)
+  											 (- *screen-width* 1))
+  											((< (+ (get-x (get-p2 *player*)) (round x)) 0)
+  											 0)
+  											(t
+  											 (+ (get-x (get-p2 *player*)) (round x))))
+  								  :y2 (cond ((>= (+ (get-y (get-p2 *player*)) (round y)) *screen-height*)
+  											 (- *screen-height* 1))
+  											((< (+ (get-y (get-p2 *player*)) (round y)) 0)
+  											 0)
+  											(t
+  											 (+ (get-y (get-p2 *player*)) (round y))))))
+  		(setf x (- x (* e y)))
+  		(setf y (+ y (* e x)))))
+  )
+
+;;; HUD
+
+(defun message (str &key (color :cwhite))
+  (push (make-instance 'message :color color :str str) *messages*))
+
+(defun stats ()
+  (bar 0 *screen-height* "HP" (get-hp *player*) (get-max-hp *player*) :color :cgreen)
+  (mvprintw *screen-height* 25 (format nil "ATK: ~A: DEF: ~A" (get-atk *player*) (get-def *player*))))
+
+(defun bar (x y label val max &key (color :cwhite))
+  (mvprintw y x (concatenate 'string
+							 label
+							 ": [     ] " (format nil "(~A / ~A)" val max)))
+  (attron color)
+  (mvprintw y (+ x (length label) 3) (concatenate 'string
+												  (make-string (floor (* 5 (/ val max))) :initial-element #\=)
+												  (if (= (floor (* 5 (/ val max))) (ceiling (* 5 (/ val max))))
+													  ""
+													  ":")))
+  (attroff color))
 
 ;;; Input
 
@@ -718,8 +980,165 @@
 		 (rotate-player 'clockwise))
 		((eq in #\g)
 		 (gather-player))
-		((eq in #\q)
-		 'quit)))
+		((or (eq in #\Escape) (eq in #\m))
+		 (main-menu))))
+
+;;; Main Menu
+
+(defun main-menu ()
+  (erase)
+  (let ((cursor-pos 0) (max-cursor 6) (options nil))
+	(attron :cred)
+	(mvprintw 4 5 "PHALANX")
+	(attroff :cred)
+
+	(attron :cyellow)
+	(mvprintw 7 5 "By Keith Bateman")
+	(attroff :cyellow)
+	(mvprintw 10 5 "n) New Game")
+	(mvprintw 11 5 "s) Save Game")
+	(mvprintw 12 5 "c) Continue Saved Game")
+	(mvprintw 13 5 "r) Resume Game")
+	(mvprintw 14 5 "q) Quit")
+	(mvprintw 15 5 "?) Help")
+	  
+	(setf options (acons 0 #\n options))
+	(setf options (acons 1 #\s options))
+	(setf options (acons 2 #\c options))
+	(setf options (acons 3 #\r options))
+	(setf options (acons 4 #\q options))
+	(setf options (acons 5 #\? options))
+
+	(defun resume-game ()
+	  (when *game-state*
+		(erase)
+		(render-all)
+		t))
+	
+	(defun new-game ()
+	  (setf *objects* nil)
+	  (setf *player* (make-instance 'player
+									:p1 (make-instance 'half-player :x 10 :y 10 :blocks-sight nil)
+									:p2 (make-instance 'half-player :x 12 :y 10 :blocks-sight nil)
+									:hp 10
+									:atk 5
+									:def 5
+									:ai '(lambda (mon) (input))
+									:death 'player-death))
+	  (setf *messages* nil)
+	  (setf *map* (make-array (list *screen-width* *screen-height*)))
+	  (setf *game-state* t)
+	  (init-map)
+	  (fov-calculate)
+	  (resume-game))
+	
+	(defun save-game ()
+	  "Saves the game in a text file as lisp data"
+	  (with-open-file (save-file "phalanx-save.sav"
+								 :direction :output
+								 :if-exists :supersede
+								 :if-does-not-exist :create)
+		(write (cons '*player* *player*) :stream save-file)
+		(write (cons '*map* *map*) :stream save-file)
+		(write (cons '*objects* *objects*) :stream save-file)
+		(write (cons '*game-state* *game-state*) :stream save-file)
+		(write (cons '*messages* *messages*) :stream save-file))
+	  'quit)
+	
+	(defun continue-game ()
+	  "A hairy hack for loading a save game. It's a hairy hack because of CLOS, and I put up with it because of CLOS"
+	  (defun load-object (spec)
+		"Create a new instance of an object with the given print representation"
+		(let ((new-obj (make-instance (car spec))))
+		  (dolist (slot-pair (cdr spec))
+			(cond ((eq (cdr slot-pair) 'unbound)
+				   (slot-makunbound new-obj (car slot-pair)))
+				  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair))) (not (eq (cadr slot-pair)
+																					  'lambda)))
+				   (setf (slot-value new-obj (car slot-pair)) nil)
+				   (dolist (new-spec (cdr slot-pair))
+					 (setf (slot-value new-obj (car slot-pair))
+						   (cons (load-object new-spec) (slot-value new-obj (car slot-pair))))))
+				  ((or (atom (cdr slot-pair)) (and (listp (cdr slot-pair)) (eq (cadr slot-pair) 'lambda)))
+				   (setf (slot-value new-obj (car slot-pair))
+						 (cdr slot-pair)))))
+		  new-obj))					
+	  
+	  (with-open-file (load-file "phalanx-save.sav"
+								 :direction :input
+								 ;; :if-does-not-exist nil
+								 )
+		(let ((parse-file (read load-file nil 'done)) (temp-obj nil))
+		  (while (not (eq parse-file 'done))
+			(when (find-symbol (symbol-name (car parse-file)))
+			  (setf temp-obj (cdr parse-file))
+			  (cond ((listp temp-obj)
+					 (if (not (listp (car temp-obj)))
+						 (set (car parse-file) (load-object temp-obj))
+						 (progn
+						   (set (car parse-file) nil)
+						   (dolist (obj-datum temp-obj)
+							 (let ((new-obj (load-object obj-datum)))
+							   (set (car parse-file) (cons new-obj (eval (car parse-file)))))))))
+					((and (arrayp temp-obj)
+						  (= (array-rank temp-obj) 2))
+					 (set (car parse-file) (make-array (list (array-dimension temp-obj 0)
+															 (array-dimension temp-obj 1))))
+					 (dotimes (x (array-dimension temp-obj 0))
+					   (dotimes (y (array-dimension temp-obj 1))
+						 (let* ((obj-spec (aref temp-obj x y))
+								(new-obj (load-object obj-spec)))
+						   (setf (aref (eval (car parse-file)) x y)
+								 new-obj)))))
+					((atom temp-obj)
+					 (set (car parse-file) temp-obj))
+					(t
+					 (error "In file load, could not parse object ~A" temp-obj))))
+			(setf parse-file (read load-file nil 'done))
+			(setf temp-obj nil)))
+		(resume-game)))
+	
+	(defun process-input (in)
+	  (cond ((eq in #\j)
+			 (setf cursor-pos (mod (+ 1 cursor-pos) max-cursor))
+			 t)
+			((eq in #\k)
+			 (setf cursor-pos (mod (- cursor-pos 1) max-cursor))
+			 t)
+			((eq in #\h)
+			 (setf cursor-pos (mod (- cursor-pos 1) max-cursor))
+			 t)
+			((eq in #\l)
+			 (setf cursor-pos (mod (+ 1 cursor-pos) max-cursor))
+			 t)
+			((or (eq in #\Space) (eq in #\Return) (eq in #\Newline))
+			 (process-input (cdr (assoc cursor-pos options))))
+			((eq in #\?)
+			 ;; FIXME: display help
+			 t)
+			((or (eq in #\n) (eq in #\N))
+			 (new-game)
+			 nil)
+			((or (eq in #\s) (eq in #\S))
+			 (save-game))
+			((or (eq in #\r) (eq in #\R))
+			 (not (resume-game)))
+			((or (eq in #\c) (eq in #\C))
+			 (continue-game)
+			 nil)
+			((or (eq in #\q) (eq in #\Q))
+			 (setf *game-state* nil) ; FIXME: This should probably also delete save files and display a warning prompt
+			 'quit)
+			(t t)))
+	
+	(while t
+	  (move (+ 10 cursor-pos) 5)
+	  (refresh)
+	  (let ((in (process-input (curses-code-char (wgetch *stdscr*)))))
+		(when (not in)
+		  (return t))
+		(when (eq in 'quit)
+		  (return 'quit))))))
 
 ;;; Control Flow
 
@@ -727,9 +1146,11 @@
   (setf *random-state* (make-random-state t))
   (connect-console)
   (noecho)
-  (init-map)
-  (render-all)
-  (while (not (eq (input) 'quit))
+  (main-menu)
+  (while (and *game-state*
+			  (prog1 (not (eq (take-turn *player*) 'quit))
+				(dolist (mon (remove-if-not (lambda (obj) (instance-of-p obj 'monster)) *objects*))
+				  (take-turn mon))))
 	(render-all))
   (close-console)
   #+clisp (ext:quit))
