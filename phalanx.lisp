@@ -45,9 +45,6 @@
 		 ((= ,v ,end) (progn ,@body nil))
 	   ,@body)))
   
-(defmacro instance-of-p (instance class)
-  `(eq (class-name (class-of ,instance)) ,class))
-
 (defmacro format-message ((str &rest format-args) &key (color :cwhite))
   `(message (format nil ,str ,@format-args) :color ,color))
 
@@ -65,6 +62,18 @@
 
 (defun random-list (lst)
   (nth (random (length lst)) lst))
+
+(defun random-deviation (num &key (zero-p nil))
+  (let ((chosen (- (random (+ 1 (* 2 num))) num)))
+	(if (and (not zero-p)
+			 (= chosen 0))
+		(random-deviation num)
+		chosen)))
+
+(defun bound (num boundary)
+  (if (> num boundary)
+	  boundary
+	  num))
 
 ;;; Name generator
 
@@ -95,6 +104,13 @@
    (pickup :initform nil :initarg :pickup :accessor pickup-p)))
 
 (init-print obj '(x y char name color blocks blocks-sight pickup))
+
+(defclass item (obj)
+  ((pickup :initform t)
+   (use :initform (lambda (a b) t) :initarg :use :accessor get-use)
+   (one-use :initform t :initarg :one-use :accessor one-use-p)))
+
+(init-print item '(x y char name color blocks blocks-sight pickup))
 
 ;; list of roman enemies '(gladiator slave hun visigoth persian goth vandal carthaginian greek)
 ;; list of fantastical enemies '()
@@ -137,11 +153,13 @@
 												:x2 (get-x (get-p1 *player*)) :y2 (get-y (get-p1 *player*))))) 2)
 			  (> (length (points (make-instance 'line :x1 (get-x mon) :y1 (get-y mon)
 												:x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))) 2)
-			  (not (null (dijkstra-path (dijkstra-map (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
-													  (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
+			  (not (null (dijkstra-path (apply #'dijkstra-map (append (list (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+																			(cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
+																	  *goals*))
 										(cons (get-x mon) (get-y mon))))))
-		 (let ((path (dijkstra-path (dijkstra-map (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
-												  (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
+		 (let ((path (dijkstra-path (apply #'dijkstra-map (append (list (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+																		(cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
+																  *goals*))
 									(cons (get-x mon) (get-y mon)))))
 		   (move-mon mon (- (car path) (get-x mon)) (- (cdr path) (get-y mon)))
 		 ;; Chase
@@ -161,11 +179,40 @@
   (setf *game-state* nil)
   (message "You die a lonely and depressing death" :color :cred))
 
+(defmethod leader-death ((mon monster))
+  ;; NOTE: this removes all goals associated with the leader, even if they're associated with another leader
+  (setf *goals* (remove-if (lambda (x) (member x (get-goals mon)))
+						   *goals*))
+  (setf (get-char mon) #\%)
+  (setf (get-ai mon) '(lambda (mon) t))
+  (setf (blocks-p mon) nil)
+  (format-message ("~A dies a noble death" (get-name mon)) :color :cred))
+
 (defmethod can-see-p ((mon-looking monster) (mon-looked-at monster))
   (member (cons (get-x mon-looked-at) (get-y mon-looked-at))
 		  (get-sight-line (make-instance 'line :x1 (get-x mon-looking) :y1 (get-y mon-looking)
 										 :x2 (get-x mon-looked-at) :y2 (get-y mon-looked-at)))
 		  :test #'equal))
+
+(defmethod atk ((mon monster))
+  (defun bonus-atk (mon)
+	0;; (reduce '+ (mapcar #'get-atk-bonus (equipment mon)))
+	)
+  (+ (get-atk mon) (bonus-atk mon)))
+
+(defmethod def ((mon monster))
+  (defun bonus-def (mon)
+	0
+	;; (reduce '+ (mapcar #'get-def-bonus (equipment mon)))
+	)
+  (+ (get-def mon) (bonus-def mon)))
+
+(defmethod max-hp ((mon monster))
+  (defun bonus-max-hp (mon)
+	0
+	;; (reduce '+ (mapcar #'get-max-hp-bonus (equipment mon)))
+	)
+  (+ (get-max-hp mon) (bonus-max-hp mon)))
 
 (defmethod attack ((attacker monster) (defender monster))
   "Have the attacker monster perform an attack on the defender monster"
@@ -179,15 +226,76 @@
 		  (t (format-message ("~A lunges at ~A and misses!" (get-name attacker) (get-name defender)) :color :cred)))))
 
 (defmethod move-mon ((mon monster) dx dy)
-  (setf (get-x mon) (+ (get-x mon) dx))
-  (setf (get-y mon) (+ (get-y mon) dy)))
+  (let ((new-x (+ (get-x mon) dx))
+		(new-y (+ (get-y mon) dy)))
+	(when (not (blocked-p new-x new-y))
+	  (setf (get-x mon) new-x)
+	  (setf (get-y mon) new-y))))
 
 (init-print monster '(x y char name color blocks blocks-sight pickup hp max-hp attack defense ai death))
+
+(defclass leader (monster)
+  ((goals :initform nil :initarg :goals :accessor get-goals)
+   (ai :initform 'square-leader-ai :initarg :ai :accessor get-ai)
+   (death :initform 'leader-death :initarg :death :accessor get-death)))
+
+(init-print leader '(x y char name color blocks blocks-sight pickup hp max-hp attack defense ai death goals))
+
+(defmethod add-goal ((l leader) goal)
+  (setf (get-goals l) (cons goal (get-goals l)))
+  (if (member goal *goals* :test #'equal)
+	  goals
+	  (setf *goals* (cons goal *goals*))))
+
+(defmethod square-leader-ai ((l leader))
+  (setf *goals* (remove-if (lambda (x) (member x (get-goals l)))
+						   *goals*))
+  (setf (get-goals l) nil) ; Reset goals for better or worse
+  (mapcar (lambda (pt)
+			(add-goal l (cons 0.5 pt)))
+		  (delete (cons (get-x l) (get-y l))
+				  (remove-if (lambda (pt) (blocked-p (car pt) (cdr pt))) (points-within 1 (cons (get-x l) (get-y l))))
+				  :test #'equal))
+  (cond ((or (<= (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
+												:x2 (get-x (get-p1 *player*)) :y2 (get-y (get-p1 *player*))))) 2)
+			 (<= (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
+												:x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))) 2))
+		 (attack l *player*))))
+
 
 (defclass half-player (monster)
   ((inventory :initform nil :initarg :inv :accessor get-inv)))
 
 (init-print half-player '(x y color blocks blocks-sight pickup inventory))
+
+(defgeneric pickup (monster)
+  (:documentation "Pick up the item where the monster is standing"))
+
+(defmethod pickup ((p half-player))
+  (let ((objs (remove-if-not (lambda (obj) (and (= (get-x obj) (get-x p))
+  												(= (get-y obj) (get-y p))
+  												(pickup-p obj)))
+  							 *objects*)))
+  	(when (not (null (car objs)))
+	  (push (car objs) (get-inv p))
+	  (setf *objects* (delete (car objs) *objects* :count 1)))
+	(car objs)))
+
+(defmethod drop-item ((i item) (p half-player))
+  (setf (get-x i) (get-x p))
+  (setf (get-y i) (get-y p))
+  (push i *objects*)
+  (setf (get-inv p) (delete i (get-inv p) :count 1)))
+
+(defmethod check-for-mon-attack ((p half-player) dx dy)
+  "Attacks space where player would have moved to if possible"
+  (let ((new-x (+ (get-x p) dx))
+		(new-y (+ (get-y p) dy)))
+	(dolist (defender (remove-if-not (lambda (obj) (typep obj 'monster)) *objects*))
+	  (when (and (= (get-x defender) new-x)
+				 (= (get-y defender) new-y))
+		(attack *player* defender))))
+  t)
 
 ;; NOTE: This gets quite complicated because of the restrictions of an object system
 (defclass player (monster)
@@ -197,13 +305,27 @@
 
 (init-print player '(p1 p2 name x y hp max-hp attack defense ai death))
 
+(defmethod use-item ((i item) (p player))
+  (funcall (coerce (get-use i) 'function) i p))
+
+(defmethod pickup ((p player))
+  (let ((pickup-1 (pickup (get-p1 p)))
+		(pickup-2 (pickup (get-p2 p))))
+	(when pickup-1
+	  (format-message ("~A picked up ~A" (get-name p) (get-name pickup-1)) :color :cgreen))
+	(when pickup-2
+	  (format-message ("~A picked up ~A" (get-name p) (get-name pickup-2)) :color :cgreen))))
+
 (defun move-player (dx dy)
   "Moves the player if possible"
-  (when (and (not (blocked-p (+ (get-x (get-p1 *player*)) dx) (+ (get-y (get-p1 *player*)) dy)))
-			 (not (blocked-p (+ (get-x (get-p2 *player*)) dx) (+ (get-y (get-p2 *player*)) dy))))
-	(move-mon (get-p1 *player*) dx dy)
-	(move-mon (get-p2 *player*) dx dy)
-	(fov-calculate)))
+  (cond ((and (not (blocked-p (+ (get-x (get-p1 *player*)) dx) (+ (get-y (get-p1 *player*)) dy)))
+			  (not (blocked-p (+ (get-x (get-p2 *player*)) dx) (+ (get-y (get-p2 *player*)) dy))))
+		 (move-mon (get-p1 *player*) dx dy)
+		 (move-mon (get-p2 *player*) dx dy)
+		 (fov-calculate))
+		(t
+		 (check-for-mon-attack (get-p1 *player*) dx dy)
+		 (check-for-mon-attack (get-p2 *player*) dx dy))))
 
 (defun separate-player ()
   "Moves the player units farther apart if possible"
@@ -222,11 +344,14 @@
 						   :x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))
 		 (p1-dir (mon-away-direction (get-p1 *player*) (center ln)))
 		 (p2-dir (mon-away-direction (get-p2 *player*) (center ln))))
-	(when (and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
-			 (not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
-	  (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-	  (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
-	  (fov-calculate))))
+	(cond ((and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
+				(not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
+		   (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+		   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+		   (fov-calculate))
+		  (t
+		   (check-for-mon-attack (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+		   (check-for-mon-attack (get-p2 *player*) (car p2-dir) (cdr p2-dir))))))
 
 (defun gather-player ()
   "Moves the player units closer together if possible"
@@ -245,15 +370,18 @@
 						   :x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))
 		 (p1-dir (mon-towards-direction (get-p1 *player*) (center ln)))
 		 (p2-dir (mon-towards-direction (get-p2 *player*) (center ln))))
-	(when (and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
-			   (not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir))))
-			   (or (not (= (+ (get-x (get-p1 *player*)) (car p1-dir)) ; For now I just check to avoid moving to the center, but eventually I would like to treat it as two attacks on the center point
-						   (+ (get-x (get-p2 *player*)) (car p2-dir))))
-				   (not (= (+ (get-y (get-p1 *player*)) (cdr p1-dir))
-						   (+ (get-y (get-p2 *player*)) (cdr p2-dir))))))
-	  (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-	  (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
-	  (fov-calculate))))
+	(cond ((and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
+				(not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir))))
+				(or (not (= (+ (get-x (get-p1 *player*)) (car p1-dir)) ; For now I just check to avoid moving to the center, but eventually I would like to treat it as two attacks on the center point
+							(+ (get-x (get-p2 *player*)) (car p2-dir))))
+					(not (= (+ (get-y (get-p1 *player*)) (cdr p1-dir))
+							(+ (get-y (get-p2 *player*)) (cdr p2-dir))))))
+		   (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+		   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+		   (fov-calculate))
+		  (t
+		   (check-for-mon-attack (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+		   (check-for-mon-attack (get-p2 *player*) (car p2-dir) (cdr p2-dir))))))
 
 (defun rotate-player (direction)
   "Rotate player in a clockwise or counter direction"
@@ -295,13 +423,16 @@
 							   (let ((goto (car pts)))
 								 (cons (- (car goto) (get-x (get-p2 *player*)))
 									   (- (cdr goto) (get-y (get-p2 *player*)))))))))
-			 (when (and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
-						(not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
-			   (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-			   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
-			   (fov-calculate))))
+			 (cond ((and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
+						 (not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
+					(move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+					(move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+					(fov-calculate))
+				   (t
+					(check-for-mon-attack (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+					(check-for-mon-attack (get-p2 *player*) (car p2-dir) (cdr p2-dir))))))
 		  ((eq direction 'counter)
-(let ((p1-dir (let* ((pts (wall-points (find-rect (center ln) (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*))) 1)))
+		   (let ((p1-dir (let* ((pts (wall-points (find-rect (center ln) (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*))) 1)))
 								(subsequent (member (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
 													pts :test #'equal)))
 						   (if (> (length subsequent) 1)
@@ -321,11 +452,14 @@
 							   (let ((goto (car pts)))
 								 (cons (- (car goto) (get-x (get-p2 *player*)))
 									   (- (cdr goto) (get-y (get-p2 *player*)))))))))
-			 (when (and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
-						(not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
-			   (move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
-			   (move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
-			   (fov-calculate))))
+			 (cond ((and (not (blocked-p (+ (get-x (get-p1 *player*)) (car p1-dir)) (+ (get-y (get-p1 *player*)) (cdr p1-dir))))
+						 (not (blocked-p (+ (get-x (get-p2 *player*)) (car p2-dir)) (+ (get-y (get-p2 *player*)) (cdr p2-dir)))))
+					(move-mon (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+					(move-mon (get-p2 *player*) (car p2-dir) (cdr p2-dir))
+					(fov-calculate))
+				   (t
+					(check-for-mon-attack (get-p1 *player*) (car p1-dir) (cdr p1-dir))
+					(check-for-mon-attack (get-p2 *player*) (car p2-dir) (cdr p2-dir))))))
 		  (t
 		   (error "Improper direction ~A" direction)))))
 
@@ -542,12 +676,16 @@
 
 (defparameter *messages* nil)
 
+(defparameter *goals* nil)
+
 (defparameter *player* (make-instance 'player
 									  :p1 (make-instance 'half-player :x 10 :y 10 :blocks-sight nil)
 									  :p2 (make-instance 'half-player :x 12 :y 10 :blocks-sight nil)
-									  :hp 10
-									  :atk 5
-									  :def 5))
+									  :hp (+ 30 (random 21))
+									  :atk (+ 5 (random 4))
+									  :def (+ 5 (random 4))
+									  :ai '(lambda (mon) (input))
+									  :death 'player-death))
 
 ;;; Map Functions
 
@@ -582,8 +720,8 @@
   (defun big-open-level ()
 	"Uses 3 different dungeon generation methods in unison in an attempt to create a big open level with roughly rectangular rooms and a directional component"
 	(let* ((shapes (split-dungeon 0 1 1 (- *screen-width* 2) (- *screen-height* 2)))
-		   (rects (remove-if-not (lambda (x) (instance-of-p x 'rect)) shapes))
-		   (lines (remove-if-not (lambda (x) (instance-of-p x 'line)) shapes)))
+		   (rects (remove-if-not (lambda (x) (typep x 'rect)) shapes))
+		   (lines (remove-if-not (lambda (x) (typep x 'line)) shapes)))
 
 	  (dolist (r rects)
 		(draw r))
@@ -606,7 +744,71 @@
 	;; TODO: This will be a level with two separate corridors, forcing the player to split his force
 	(direct-dungeon :windyness (random 20) :roughness (random 20) :complexity 2))
 
-  (big-open-level))
+  (big-open-level)
+
+  ;; Generate monsters
+  (dotimes (n (+ 5 (random 6))) ; Between 5 and 10
+	(let ((x (random *screen-width*))
+		  (y (random *screen-height*)))
+	  (while (or (blocked-p x y)
+				 (and (= x (get-x (get-p1 *player*)))
+					  (= y (get-y (get-p1 *player*))))
+				 (and (= x (get-x (get-p2 *player*)))
+					  (= y (get-y (get-p2 *player*)))))
+		(setf x (random *screen-width*))
+		(setf y (random *screen-height*)))
+	  (push (eval (random-list `((make-instance 'monster :x ,x :y ,y
+												:hp (+ 20 (random-deviation 3 :zero-p t))
+												:atk (+ 6 (random-deviation 1 :zero-p t))
+												:def (+ 3 (random-deviation 1 :zero-p t))
+												:name "goth" :char #\g :color :cpurple :blocks t)
+								 (make-instance 'monster :x ,x :y ,y
+												:hp (+ 10 (random-deviation 1 :zero-p t))
+												:atk 2
+												:def 2
+												:name "slave" :char #\s :blocks t)
+								 (make-instance 'monster :x ,x :y ,y
+												:hp (+ 15 (random-deviation 4 :zero-p t))
+												:atk (+ 3 (random-deviation 2 :zero-p t))
+												:def (+ 6 (random-deviation 2 :zero-p t))
+												:name "greek" :char #\g :color :cgreen :blocks t))))
+			*objects*)))
+  
+  ;; Generate items
+  (dotimes (n (+ 3 (random 5))) ; Between 3 and 7
+	(let ((x (random *screen-width*))
+		  (y (random *screen-height*)))
+	  (while (blocks-p (aref *map* x y))
+		(setf x (random *screen-width*))
+		(setf y (random *screen-height*)))
+	  (push (eval (random-list `((make-instance 'item :x ,x :y ,y
+												:name "Healing Draught"
+												:char #\!
+												:color :cpurple
+												:use '(lambda (i p)
+													   (setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
+												:one-use t))))
+			*objects*)))
+  
+  ;; Generate leader(s)
+  ;; While this is a great idea, it requires a more efficient algorithm for generating dijkstra maps of more than one point
+  ;; (when (= (random 4) 0)
+  ;; 	(let ((x (random *screen-width*))
+  ;; 		  (y (random *screen-height*)))
+  ;; 	  (while (or (blocked-p x y)
+  ;; 				 (and (= x (get-x (get-p1 *player*)))
+  ;; 					  (= y (get-y (get-p1 *player*))))
+  ;; 				 (and (= x (get-x (get-p2 *player*)))
+  ;; 					  (= y (get-y (get-p2 *player*)))))
+  ;; 		(setf x (random *screen-width*))
+  ;; 		(setf y (random *screen-height*)))
+  ;; 	  (setf *objects* (cons (make-instance 'leader :x x :y y
+  ;; 										   :hp (+ 15 (random 5))
+  ;; 										   :atk (+ 3 (random 3))
+  ;; 										   :def (+ 1 (random 3))
+  ;; 										   :name "Aristotle" :char #\G :color :cgreen :blocks t)
+  ;; 							*objects*))))
+  )
 
 (defun get-random-rect (x y width height)
   "Get a random rectangle within the \"dungeon\" rectangle defined by x y width height"
@@ -700,15 +902,15 @@
 	(while (<= (- x start) length)
 	  (setf x (+ x 1))
 	  (when (<= (random 100) roughness)
-		(setf height (+ height (random-list '(-2 -1 1 2))))
+		(setf height (+ height (random-deviation 2)))
 		(when (< height 3)
 		  (setf height 3))
 		(when (> height 6)
 		  (setf height 6)))
 	  (when (<= (random 100) windyness)
-		(setf y (+ y (random-list (if (= height 3)
-									  '(-1 1) ;Prevent a situation where the player can't move
-									  '(-2 -1 1 2)))))
+		(setf y (+ y  (if (= height 3)
+						  (random-deviation 1) ;Prevent a situation where the player can't move
+						  (random-deviation 2))))
 			
 		(when (< y 1)
 		  (setf y 1)))
@@ -776,7 +978,7 @@
 	  (attron (slot-value obj 'color))
 	  (mvaddch (get-y obj) (get-x obj) (slot-value obj 'char))
 	  (Attroff (slot-value obj 'color))))
-  (dolist (mon (remove-if-not (lambda (obj) (instance-of-p obj 'monster)) *objects*))
+  (dolist (mon (remove-if-not (lambda (obj) (typep obj 'monster)) *objects*))
 	(when (lit (aref *map* (get-x mon) (get-y mon)))
 		 (progn (attron (slot-value mon 'color))
 				(mvaddch (get-y mon) (get-x mon) (slot-value mon 'char))
@@ -786,8 +988,12 @@
   (let* ((x1 (get-x (get-p1 *player*))) (y1 (get-y (get-p1 *player*)))
 		 (x2 (get-x (get-p2 *player*))) (y2 (get-y (get-p2 *player*)))
 		 (cen (center (make-instance 'line :x1 x1 :y1 y1 :x2 x2 :y2 y2))))
+	(attron :cred)
 	(mvaddch y1 x1 #\@)
+	(attroff :cred)
+	(attron :cblue)
 	(mvaddch y2 x2 #\@)
+	(attroff :cblue)
 	(move (cdr cen) (car cen))))
 
 (defun render-messages ()
@@ -827,7 +1033,7 @@
 
 ;;; Pathfinding
 
-(defun dijkstra-map (&rest sources)
+(defun dijkstra-map (&rest sources) 
   (defun dmap (source &optional (default 0))
 	(let ((path-lengths (make-array (list *screen-width* *screen-height*))) (last source) (known (list (cons (car source) (cdr source)))) selectable)
 	  (setf (aref path-lengths (car source) (cdr source)) default)
@@ -861,7 +1067,9 @@
   
   (let ((map (make-array (list *screen-width* *screen-height*))))
   	(dolist (src sources)
-  	  (let ((temp (dmap src)))
+  	  (let ((temp (if (consp (cdr src))
+					  (dmap (cdr src) (car src)) ;Each source is a cons pair consisting of the default value for that source followed by a point or just a point
+					  (dmap src))))
   		(dotimes (x (- *screen-width* 1))
   		  (dotimes (y (- *screen-height* 1))
   			(cond ((null (aref map x y))
@@ -875,13 +1083,13 @@
 (defun dijkstra-path (dmap start)
   (let* ((allowed-point-vals (remove-if-not #'identity
 											(mapcar (lambda (x) (aref dmap (car x) (cdr x)))
-													(points-around start))))
+													(points-within 1 start))))
 		 (min-points 
 		  (if (null allowed-point-vals)
 			  nil
 			  (remove-if-not (lambda (x) (eq (aref dmap (car x) (cdr x))
 											 (reduce #'min allowed-point-vals)))
-					 (points-around start)))))
+					 (points-within 1 start)))))
 	(if (null min-points)
 		nil
 		(random-list min-points))))
@@ -934,19 +1142,21 @@
   (push (make-instance 'message :color color :str str) *messages*))
 
 (defun stats ()
-  (bar 0 *screen-height* "HP" (get-hp *player*) (get-max-hp *player*) :color :cgreen)
-  (mvprintw *screen-height* 25 (format nil "ATK: ~A: DEF: ~A" (get-atk *player*) (get-def *player*))))
+  (bar 0 *screen-height* "HP" (get-hp *player*) (max-hp *player*) :color :cgreen)
+  (mvprintw *screen-height* 25 (format nil "ATK: ~A: DEF: ~A" (atk *player*) (def *player*))))
 
 (defun bar (x y label val max &key (color :cwhite))
   (mvprintw y x (concatenate 'string
 							 label
 							 ": [     ] " (format nil "(~A / ~A)" val max)))
   (attron color)
-  (mvprintw y (+ x (length label) 3) (concatenate 'string
-												  (make-string (floor (* 5 (/ val max))) :initial-element #\=)
-												  (if (= (floor (* 5 (/ val max))) (ceiling (* 5 (/ val max))))
-													  ""
-													  ":")))
+  (mvprintw y (+ x (length label) 3) (if (> val 0)
+										 (concatenate 'string
+													  (make-string (floor (* 5 (/ val max))) :initial-element #\=)
+													  (if (= (floor (* 5 (/ val max))) (ceiling (* 5 (/ val max))))
+														  ""
+														  ":"))
+										 ""))
   (attroff color))
 
 ;;; Input
@@ -980,10 +1190,161 @@
 		 (rotate-player 'clockwise))
 		((eq in #\g)
 		 (gather-player))
+		((eq in #\i)
+		 (inventory))
+		((eq in #\,)
+		 (pickup *player*))
 		((or (eq in #\Escape) (eq in #\m))
 		 (main-menu))))
 
-;;; Main Menu
+;;; Menus
+
+(defun inventory (&optional (filter #'identity))
+  (erase)
+  (let* ((i 0)
+		 (cursor (cons 0 0))
+		 (in nil)
+		 (selectable (cons (remove-if-not filter (get-inv (get-p1 *player*)))
+						   (remove-if-not filter (get-inv (get-p2 *player*)))))
+		 (num-selections (cons (if (= (length (car selectable)) 0)
+								   1 ; Pretend that we have one selection if we have none
+								   (length (car selectable)))
+							   (if (= (length (cdr selectable)) 0)
+								   1
+								   (length (cdr selectable))))))
+	(attron :cred)
+	(mvprintw 0 0 "red")
+	(attroff :cred)
+	(attron :cblue)
+	(mvprintw 0 20 "blue")
+	(attroff :cblue)
+	(mvprintw *screen-height* 0 "t - transfer | d - drop | a - apply | q - quit")
+	(dolist (obj (car selectable))
+	  (mvprintw (+ 1 i) 0 (get-name obj))
+	  (setf i (+ 1 i)))
+	(setf i 0)
+	(dolist (obj (cdr selectable))
+	  (mvprintw (+ 1 i) 20 (get-name obj))
+	  (setf i (+ 1 i)))
+	(dotimes (i (- *screen-height* 1))
+	  (mvprintw i 19 "|"))
+
+	(defun refresh-inventory ()
+	  "Refresh the inventory screen"
+	  (setf selectable (cons (remove-if-not filter (get-inv (get-p1 *player*)))
+							 (remove-if-not filter (get-inv (get-p2 *player*)))))
+	  (setf num-selections (cons (if (= (length (car selectable)) 0)
+									 1 ; Pretend that we have one selection if we have none
+									 (length (car selectable)))
+								 (if (= (length (cdr selectable)) 0)
+									 1
+									 (length (cdr selectable)))))
+	  (setf cursor (cons 0 0))
+	  (setf i 0)
+	  
+	  (erase)
+	  (attron :cred)
+	  (mvprintw 0 0 "red")
+	  (attroff :cred)
+	  (attron :cblue)
+	  (mvprintw 0 20 "blue")
+	  (attroff :cblue)
+	  (mvprintw *screen-height* 0 "t - transfer | d - drop | a - apply | q - quit")
+	  (dolist (obj (car selectable))
+		(mvprintw (+ 1 i) 0 (get-name obj))
+		(setf i (+ 1 i)))
+	  (setf i 0)
+	  (dolist (obj (cdr selectable))
+		(mvprintw (+ 1 i) 20 (get-name obj))
+		(setf i (+ 1 i)))
+	  (dotimes (i (- *screen-height* 1))
+		(mvprintw i 19 "|")))
+	
+	(while (not (eq in #\q))
+	  (cond ((eq in #\j)
+			 (setf (car cursor) (mod (+ (car cursor) 1) (if (= (cdr cursor) 0)
+															(car num-selections)
+															(cdr num-selections)))))
+			((eq in #\k)
+			 (setf (car cursor) (mod (- (car cursor) 1) (if (= (cdr cursor) 0)
+															(car num-selections)
+															(cdr num-selections)))))
+			((eq in #\h)
+			 (setf (cdr cursor) (mod (- (cdr cursor) 1) 2))
+			 (setf (car cursor) (bound (car cursor) (if (= (cdr cursor) 0)
+														(- (car num-selections) 1)
+														(- (cdr num-selections) 1)))))
+			((eq in #\l)
+			 (setf (cdr cursor) (mod (+ (cdr cursor) 1) 2))
+			 (setf (car cursor) (bound (car cursor) (if (= (cdr cursor) 0)
+														(- (car num-selections) 1)
+														(- (cdr num-selections) 1)))))
+			((eq in #\a)
+			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
+															 (get-p1 *player*)
+															 (get-p2 *player*))))))
+			   (use-item (nth (car cursor)
+							  (get-inv (if (= (cdr cursor) 0)
+										   (get-p1 *player*)
+										   (get-p2 *player*))))
+						 *player*)
+			   (if (one-use-p (nth (car cursor)
+								   (get-inv (if (= (cdr cursor) 0)
+												(get-p1 *player*)
+												(get-p2 *player*)))))
+				   (setf (get-inv (if (= (cdr cursor) 0)
+									  (get-p1 *player*)
+									  (get-p2 *player*)))
+						 (delete (nth (car cursor)
+									  (get-inv (if (= (cdr cursor) 0)
+												   (get-p1 *player*)
+												   (get-p2 *player*))))
+								 (get-inv (if (= (cdr cursor) 0)
+											  (get-p1 *player*)
+											  (get-p2 *player*)))
+								 :count 1)))
+			   (refresh-inventory)))
+			((eq in #\d)
+			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
+															 (get-p1 *player*)
+															 (get-p2 *player*))))))
+			   (let ((half-player (if (= (cdr cursor) 0)
+									  (get-p1 *player*)
+									  (get-p2 *player*))))
+				 (drop-item (nth (car cursor) (get-inv half-player)) half-player))
+			   
+			   (refresh-inventory)))
+			((eq in #\t)
+			 ;; FIXME: Cannot transfer/drop/apply the last item in a group of items
+			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
+															 (get-p1 *player*)
+															 (get-p2 *player*))))))
+			   (let ((it (nth (car cursor)
+							  (get-inv (if (= (cdr cursor) 0)
+										   (get-p1 *player*)
+										   (get-p2 *player*))))))
+
+				 ;; Add to opposite inventory
+				 (push it (get-inv (if (= (cdr cursor) 0)
+									   (get-p2 *player*)
+									   (get-p1 *player*))))
+
+				 ;; Delete from corresponding inventory
+				 (setf (get-inv (if (= (cdr cursor) 0)
+									(get-p1 *player*)
+									(get-p2 *player*)))
+					    (delete it
+								(get-inv (if (= (cdr cursor) 0)
+											 (get-p1 *player*)
+											 (get-p2 *player*)))
+								:count 1)))
+			   (refresh-inventory))))
+	  (move (+ 1 (car cursor)) (* 20 (cdr cursor)))
+	  (refresh)
+	  (setf in (curses-code-char (wgetch *stdscr*))))
+	(erase)
+	(render-all)
+	))
 
 (defun main-menu ()
   (erase)
@@ -1020,9 +1381,9 @@
 	  (setf *player* (make-instance 'player
 									:p1 (make-instance 'half-player :x 10 :y 10 :blocks-sight nil)
 									:p2 (make-instance 'half-player :x 12 :y 10 :blocks-sight nil)
-									:hp 10
-									:atk 5
-									:def 5
+									:hp (+ 30 (random 21))
+									:atk (+ 5 (random 4))
+									:def (+ 5 (random 4))
 									:ai '(lambda (mon) (input))
 									:death 'player-death))
 	  (setf *messages* nil)
@@ -1149,7 +1510,7 @@
   (main-menu)
   (while (and *game-state*
 			  (prog1 (not (eq (take-turn *player*) 'quit))
-				(dolist (mon (remove-if-not (lambda (obj) (instance-of-p obj 'monster)) *objects*))
+				(dolist (mon (remove-if-not (lambda (obj) (typep obj 'monster)) *objects*))
 				  (take-turn mon))))
 	(render-all))
   (close-console)
