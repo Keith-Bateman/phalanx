@@ -81,7 +81,7 @@
   (let ((praenomen (list "Gaius" "Lucius" "Marcus" "Publius" "Quintus" "Titus" "Tiberius" "Sextus" "Aulus" "Decimus" "Gnaeus" "Spurius" "Manius" "Servius" "Appius" "Numerius"))
 		(nomen (list "Annius" "Antonius" "Arrius" "Artorius" "Asinius" "Atilius" "Atius" "Aurelius" "Autronius" "Caecilius" "Caedicius" "Caelius" "Calidius" "Calpurnius" "Cassius" "Claudius" "Cloelius" "Cocceius" "Cominius" "Cornelius" "Coruncanius" "Curiatius" "Curius" "Curtius" "Decius" "Didius" "Domitius" "Duilius" "Durmius" "Equitius" "Fabius" "Fabricius" "Fannius" "Flavius" "Fulvius" "Furius" "Gabinius" "Galerius" "Geganius" "Gellius" "Geminius" "Genucius" "Gratius" "Herennius" "Hirtius" "Horatius" "Hortensius" "Hostilius" "Iulius" "Iunius" "Iuventius" "Laelius" "Lartius" "Licinius" "Livius" "Lucilius" "Lucretius" "Manlius" "Marcius" "Marius" "Memmius" "Menenius" "Minicius" "Minius" "Minucius" "Modius" "Mucius" "Naevius" "Nautius" "Numerius" "Numicius" "Octavius" "Ovidius" "Papirius" "Petronius" "Pinarius" "Pompeius" "Pompilius" "Pontius" "Popillius" "Porcius" "Postumius" "Quinctilius" "Quinctius" "Rubellius" "Rufius" "Rutilius" "Sallustius" "Salonius" "Salvius" "Scribonius" "Seius" "Sempronius" "Sentius" "Sergius" "Sertorius" "Servilius" "Sextius" "Sicinius" "Suetonius" "Sulpicius" "Tarpeius" "Tarquitius" "Terentius" "Titinius" "Titurius" "Tuccius" "Tullius" "Ulpius" "Valerius" "Vedius" "Velleius" "Vergilius" "Verginius" "Vibius" "Villius" "Vipsanius" "Vitellius" "Vitruvius" "Volumnius"))
 		(cognomen (list "Aculeo" "Agricola" "Agrippa" "Ahala" "Ahenobarbus" "Albinus" "Albus" "Ambustus" "Annalis" "Aquila" "Aquilinus" "Arvina" "Asellio" "Asina" "Atellus" "Avitus" "Balbus" "Barba" "Barbatus" "Bassus" "Bestia" "Bibaculus" "Bibulus" "Blaesus" "Brocchus" "Brutus" "Bubulcus" "Bucco" "Bulbus" "Buteo" "Caecus" "Caepio" "Caesar" "Calidus" "Calvinus" "Calvus" "Camillus" "Caninus" "Canus" "Capito" "Carbo" "Catilina" "Cato" "Catulus" "Celer" "Celsus" "Cethegus" "Cicero" "Cicurinus" "Cilo" "Cincinnatus" "Cinna" "Cordus" "Cornicen" "Cornutus" "Corvinus" "Corvus" "Cossus" "Costa" "Cotta" "Crassipes" "Crassus" "Crispinus" "Crispus" "Culleo" "Curio" "Cursor" "Curvus" "Denter" "Dento" "Dives" "Dolabella" "Dorsuo" "Drusus" "Figulus" "Fimbria" "Flaccus" "Flavus" "Florus" "Fronto" "Fullo" "Fusus" "Galeo" "Gemellus" "Glabrio" "Gracchus" "Gurges" "Habitus" "Helva" "Imperiosus" "Iullus" "Labeo" "Lactuca" "Laenas" "Lanatus" "Laevinus" "Laterensis" "Lentulus" "Lepidus" "Libo" "Licinus" "Longus" "Lucullus" "Lupus" "Lurco" "Macer" "Macula" "Malleolus" "Mamercus" "Marcellus" "Maro" "Merenda" "Mergus" "Merula" "Messalla" "Metellus" "Murena" "Mus" "Musca" "Nasica" "Naso" "Natta" "Nepos" "Nero" "Nerva" "Niger" "Novellus" "Ocella" "Pacilus" "Paetus" "Pansa" "Papus" "Paterculus" "Paullus" "Pavo" "Pera" "Pictor" "Piso" "Plancus" "Plautus" "Poplicola" "Postumus" "Potitus" "Praeconinus" "Praetextatus" "Priscus" "Proculus" "Publicola" "Pulcher" "Pullus" "Pulvillus" "Purpureo" "Quadratus" "Ralla" "Regillus" "Regulus" "Rufus" "Ruga" "Rullus" "Rutilus" "Salinator" "Saturninus" "Scaeva" "Scaevola" "Scapula" "Scaurus" "Scipio" "Scrofa" "Seneca" "Severus" "Silanus" "Silo" "Silus" "Stolo" "Strabo" "Structus" "Sulla" "Sura" "Taurus" "Triarius" "Trigeminus" "Trio" "Tubero" "Tubertus" "Tubulus" "Tuditanus" "Tullus" "Turdus" "Varro" "Varus" "Vatia" "Verres" "Vespillo" "Vetus" "Vitulus" "Volusus")))
-	(list (random-list praenomen) (random-list nomen) (random-list cognomen))))
+	(concatenate 'string (random-list praenomen) " " (random-list nomen) " " (random-list cognomen))))
 
 ;;; Classes, Methods, and Relevant Functions
 
@@ -172,7 +172,10 @@
   (setf (get-char mon) #\%)
   (setf (get-ai mon) '(lambda (mon) t))
   (setf (blocks-p mon) nil)
-  (format-message ("~A dies a horrible and painful death" (get-name mon)) :color :cred))
+  (format-message ("~A dies a horrible and painful death" (get-name mon)) :color :cred)
+  (setf (get-exp *player*) (+ (get-exp *player*) 10))
+  (when (> (get-exp *player*) (threshold *player*))
+	(level-up *player*)))
 
 (defmethod player-death ((mon monster))
   (setf (get-char mon) #\%)
@@ -186,7 +189,10 @@
   (setf (get-char mon) #\%)
   (setf (get-ai mon) '(lambda (mon) t))
   (setf (blocks-p mon) nil)
-  (format-message ("~A dies a noble death" (get-name mon)) :color :cred))
+  (format-message ("~A dies a noble death" (get-name mon)) :color :cred)
+  (setf (get-exp *player*) (+ (get-exp *player*) 100))
+  (when (> (get-exp *player*) (threshold *player*))
+	(level-up *player*)))
 
 (defmethod can-see-p ((mon-looking monster) (mon-looked-at monster))
   (member (cons (get-x mon-looked-at) (get-y mon-looked-at))
@@ -301,12 +307,59 @@
 (defclass player (monster)
   ((p1 :initform (make-instance 'half-player) :initarg :p1 :accessor get-p1)
    (p2 :initform (make-instance 'half-player) :initarg :p2 :accessor get-p2)
-   (name :initform (gen-roman-name) :accessor get-name)))
+   (name :initform (gen-roman-name) :accessor get-name)
+   (dlvl :initform 1 :accessor get-dlvl)
+   (lvl :initform 1 :accessor get-lvl)
+   (exp :initform 0 :accessor get-exp)))
 
-(init-print player '(p1 p2 name x y hp max-hp attack defense ai death))
+(init-print player '(p1 p2 name lvl dlvl exp x y hp max-hp attack defense ai death))
 
 (defmethod use-item ((i item) (p player))
   (funcall (coerce (get-use i) 'function) i p))
+
+(defmethod threshold ((p player))
+  (expt 10 (get-lvl p)))
+
+(defmethod level-up ((p player))
+  (setf (get-lvl p) (+ (get-lvl p) 1))
+  (setf (get-atk p) (+ (get-atk p) (* (get-lvl p) (+ 1 (random 3)))))
+  (setf (get-def p) (+ (get-def p) (* (get-lvl p) (+ 1 (random 3)))))
+  (setf (get-max-hp p) (+ (get-max-hp p) (* (get-lvl p) (+ 1 (random 3)))))
+  (setf (get-hp p) (max-hp p))
+  (message "Level up!" :color :cblue)
+  (stats)
+  (refresh))
+
+(defmethod down ((p player))
+  ;; Currently dungeon generation is Angband-style, mostly because of space considerations, but also due to laziness
+  (dolist (first-stair *objects*) 
+	(when (and (string= (get-name first-stair) "downstair")
+			   (= (get-x first-stair) (get-x (get-p1 *player*)))
+			   (= (get-y first-stair) (get-y (get-p1 *player*))))
+	  (dolist (second-stair (delete first-stair *objects*))
+		(when (and (string= (get-name second-stair) "downstair")
+				   (= (get-x second-stair) (get-x (get-p2 *player*)))
+				   (= (get-y second-stair) (get-y (get-p2 *player*))))
+		  (setf *objects* nil)
+		  (setf (get-dlvl p) (+ (get-dlvl p) 1))
+		  (erase)
+		  (init-map)
+		  (render-all))))))
+
+(defmethod up ((p player))
+  (dolist (first-stair *objects*) 
+	(when (and (string= (get-name first-stair) "upstair")
+			   (= (get-x first-stair) (get-x (get-p1 *player*)))
+			   (= (get-y first-stair) (get-y (get-p1 *player*))))
+	  (dolist (second-stair (delete first-stair *objects*))
+		(when (and (string= (get-name second-stair) "upstair")
+				   (= (get-x second-stair) (get-x (get-p2 *player*)))
+				   (= (get-y second-stair) (get-y (get-p2 *player*))))
+		  (setf *objects* nil)
+		  (setf (get-dlvl p) (- (get-dlvl p) 1))
+		  (erase)
+		  (init-map :stair 'down)
+		  (render-all))))))
 
 (defmethod pickup ((p player))
   (let ((pickup-1 (pickup (get-p1 p)))
@@ -711,11 +764,14 @@
 					(setf pts (cons (cons x y) pts))))
 	pts))
 
-(defun init-map ()
+(defun init-map (&key (stair 'up))
   "Initializes the *map* global variable"
   (dostep (x 0 (- *screen-width* 1))
 	   (dostep (y 0 (- *screen-height* 1))
 			   (setf (aref *map* x y) (make-instance 'tile :blocks t))))
+
+  (when (= (get-dlvl *player*) 0)
+	(setf *game-state* nil))
 
   (defun big-open-level ()
 	"Uses 3 different dungeon generation methods in unison in an attempt to create a big open level with roughly rectangular rooms and a directional component"
@@ -731,7 +787,7 @@
 	  (dolist (l lines)
 		(draw l)))
 	
-	(direct-dungeon :windyness (random 100) :roughness (random 50) :complexity 1)
+	(direct-dungeon :windyness (random 100) :roughness (random 50) :complexity 1 :stair stair)
 
 	;;Generate pillars
 	(dotimes (i (+ 30 (random 40)))
@@ -787,7 +843,16 @@
 												:color :cpurple
 												:use '(lambda (i p)
 													   (setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
-												:one-use t))))
+												:one-use t)
+								 ;; (make-instance 'item :x ,x :y ,y
+								 ;; 				:name "Scutum"
+								 ;; 				:char #\[
+								 ;; 				:color :cred)
+								 ;; (make-instance 'item :x ,x :y ,y
+								 ;; 				:name "Bow"
+								 ;; 				:char #\)
+								 ;; 				:color :cbrown)
+								 )))
 			*objects*)))
   
   ;; Generate leader(s)
@@ -884,7 +949,7 @@
 		   (list r)))))
 
 ;; Directional Dungeon Generator
-(defun direct-dungeon (&key (length (- *screen-width* 4)) (roughness 50) (windyness 50) (complexity 1))
+(defun direct-dungeon (&key (length (- *screen-width* 4)) (roughness 50) (windyness 50) (complexity 1) (stair 'up))
   "Generates a cavelike dungeon left to right"
   (let ((x 1)
 		(start 1)
@@ -893,12 +958,15 @@
 	(draw (make-instance 'line :x1 x :y1 y :x2 x :y2 (+ y height)))
 	(when (= complexity 1)
 	  (let ((stair-loc (random (- height 2))))
-		(setf (get-x (get-p1 *player*)) x)
-		(setf (get-y (get-p1 *player*)) (+ y stair-loc))
-		(setf (get-x (get-p2 *player*)) x)
-		(setf (get-y (get-p2 *player*)) (+ y stair-loc 2))
-		(setf *objects* (cons (make-instance 'obj :name "upstair" :x x :y (+ y stair-loc 2) :char #\<)
-							  (cons (make-instance 'obj :name "upstair" :x x :y (+ y stair-loc) :char #\<) *objects*)))))
+		(when (eq stair 'up)
+		  (setf (get-x (get-p1 *player*)) x)
+		  (setf (get-y (get-p1 *player*)) (+ y stair-loc))
+		  (setf (get-x (get-p2 *player*)) x)
+		  (setf (get-y (get-p2 *player*)) (+ y stair-loc 2)))
+		(when (or (eq stair 'up)
+				  (eq stair 'down))
+		  (setf *objects* (cons (make-instance 'obj :name "upstair" :x x :y (+ y stair-loc 2) :char #\<)
+								(cons (make-instance 'obj :name "upstair" :x x :y (+ y stair-loc) :char #\<) *objects*))))))
 	(while (<= (- x start) length)
 	  (setf x (+ x 1))
 	  (when (<= (random 100) roughness)
@@ -921,8 +989,15 @@
 	(if (> complexity 1)
 		(direct-dungeon :length length :windyness windyness :roughness roughness :complexity (- complexity 1))
 		(let ((stair-loc (random (- height 2))))
-		  (setf *objects* (cons (make-instance 'obj :name "downstair" :x x :y (+ y stair-loc 2) :char #\>)
-								(cons (make-instance 'obj :name "downstair" :x x :y (+ y stair-loc) :char #\>) *objects*)))))))
+		  (when (eq stair 'down)
+			(setf (get-x (get-p1 *player*)) x)
+			(setf (get-y (get-p1 *player*)) (+ y stair-loc))
+			(setf (get-x (get-p2 *player*)) x)
+			(setf (get-y (get-p2 *player*)) (+ y stair-loc 2)))
+		  (when (or (eq stair 'up)
+					(eq stair 'down))
+			(setf *objects* (cons (make-instance 'obj :name "downstair" :x x :y (+ y stair-loc 2) :char #\>)
+								  (cons (make-instance 'obj :name "downstair" :x x :y (+ y stair-loc) :char #\>) *objects*))))))))
 
 ;; Cellular automata dungeon generator
 (defun smooth-dungeon (iterations)
@@ -1142,8 +1217,9 @@
   (push (make-instance 'message :color color :str str) *messages*))
 
 (defun stats ()
-  (bar 0 *screen-height* "HP" (get-hp *player*) (max-hp *player*) :color :cgreen)
-  (mvprintw *screen-height* 25 (format nil "ATK: ~A: DEF: ~A" (atk *player*) (def *player*))))
+  (mvprintw *screen-height* 0 (format nil "DL: ~A CL: ~A" (get-dlvl *player*) (get-lvl *player*)))
+  (bar 12 *screen-height* "HP" (get-hp *player*) (max-hp *player*) :color :cgreen)
+  (mvprintw *screen-height* 37 (format nil "A: ~A D: ~A" (atk *player*) (def *player*))))
 
 (defun bar (x y label val max &key (color :cwhite))
   (mvprintw y x (concatenate 'string
@@ -1194,10 +1270,75 @@
 		 (inventory))
 		((eq in #\,)
 		 (pickup *player*))
+		((eq in #\;)
+		 (look)
+		 (input))
+		((eq in #\>)
+		 (down *player*)
+		 (input))
+		((eq in #\<)
+		 (up *player*)
+		 (input))
 		((or (eq in #\Escape) (eq in #\m))
-		 (main-menu))))
+		 (main-menu)
+		 (input))))
 
 ;;; Menus
+
+(defun look ()
+  "Look functions similarly to a menu, in that it blocks input"
+  (let* ((i 0)
+		 (cursor (center (make-instance 'line
+										:x1 (get-x (get-p1 *player*)) :y1 (get-y (get-p1 *player*))
+										:x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*)))))
+		 (in nil))
+
+	(defun process-input (in)
+	  (cond ((eq in #\j)
+			 (setf (cdr cursor) (mod (+ (cdr cursor) 1) *screen-height*)))
+			((eq in #\k)
+			 (setf (cdr cursor) (mod (- (cdr cursor) 1) *screen-height*)))
+			((eq in #\h)
+			 (setf (car cursor) (mod (- (car cursor) 1) *screen-width*)))
+			((eq in #\l)
+			 (setf (car cursor) (mod (+ (car cursor) 1) *screen-width*)))
+			((eq in #\y)
+			 (process-input #\h)
+			 (process-input #\k))
+			((eq in #\u)
+			 (process-input #\l)
+			 (process-input #\k))
+			((eq in #\b)
+			 (process-input #\h)
+			 (process-input #\j))
+			((eq in #\n)
+			 (process-input #\l)
+			 (process-input #\j))))
+	
+	(while (not (eq in #\q))
+	  (mvprintw (+ *screen-height* 1) 0 (make-string *screen-width* :initial-element #\Space)) ; Clear line
+	  (mvprintw (+ *screen-height* 1) 0 (format nil "~A" (mapcar (lambda (obj) (concatenate 'string
+																							"["
+																							(make-string 1
+																										 :initial-element (get-char obj))
+																							"]: "
+																							(get-name obj)))
+																 ;; TODO: include player and walls
+																 (remove-if-not (lambda (obj) (and (= (get-x obj) (car cursor))
+																								   (= (get-y obj) (cdr cursor))
+																								   (or (lit (aref *map* (car cursor) (cdr cursor)))
+																									   (and (or (string= (get-name obj) "downstair")
+																												(string= (get-name obj) "upstair"))
+																											(explored-p (aref *map* (car cursor) (cdr cursor)))))))
+																				*objects*))))
+	  (mvprintw (+ *screen-height* 2) 0 (make-string *screen-width* :initial-element #\Space))
+	  (mvprintw (+ *screen-height* 2) 0 "Type \"q\" to exit look mode")
+	  (move (cdr cursor) (car cursor))
+	  (refresh)
+	  (setf in (take-in-char))
+	  (process-input in))
+	(erase)
+	(render-all)))
 
 (defun inventory (&optional (filter #'identity))
   (erase)
@@ -1218,7 +1359,7 @@
 	(attron :cblue)
 	(mvprintw 0 20 "blue")
 	(attroff :cblue)
-	(mvprintw *screen-height* 0 "t - transfer | d - drop | a - apply | q - quit")
+	(mvprintw (+ 1 *screen-height*) 0 "t - transfer | d - drop | a - apply | q - quit")
 	(dolist (obj (car selectable))
 	  (mvprintw (+ 1 i) 0 (get-name obj))
 	  (setf i (+ 1 i)))
@@ -1226,8 +1367,9 @@
 	(dolist (obj (cdr selectable))
 	  (mvprintw (+ 1 i) 20 (get-name obj))
 	  (setf i (+ 1 i)))
-	(dotimes (i (- *screen-height* 1))
+	(dotimes (i *screen-height*)
 	  (mvprintw i 19 "|"))
+	(stats)
 
 	(defun refresh-inventory ()
 	  "Refresh the inventory screen"
@@ -1249,7 +1391,7 @@
 	  (attron :cblue)
 	  (mvprintw 0 20 "blue")
 	  (attroff :cblue)
-	  (mvprintw *screen-height* 0 "t - transfer | d - drop | a - apply | q - quit")
+	  (mvprintw (+ 1 *screen-height*) 0 "t - transfer | d - drop | a - apply | q - quit")
 	  (dolist (obj (car selectable))
 		(mvprintw (+ 1 i) 0 (get-name obj))
 		(setf i (+ 1 i)))
@@ -1257,8 +1399,9 @@
 	  (dolist (obj (cdr selectable))
 		(mvprintw (+ 1 i) 20 (get-name obj))
 		(setf i (+ 1 i)))
-	  (dotimes (i (- *screen-height* 1))
-		(mvprintw i 19 "|")))
+	  (dotimes (i *screen-height*)
+		(mvprintw i 19 "|"))
+	  (stats))
 	
 	(while (not (eq in #\q))
 	  (cond ((eq in #\j)
@@ -1315,7 +1458,6 @@
 			   
 			   (refresh-inventory)))
 			((eq in #\t)
-			 ;; FIXME: Cannot transfer/drop/apply the last item in a group of items
 			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
 															 (get-p1 *player*)
 															 (get-p2 *player*))))))
@@ -1345,6 +1487,31 @@
 	(erase)
 	(render-all)
 	))
+
+(defun help (&optional (type 'basic))
+  (erase)
+  (cond ((eq type 'basic)
+		 (mvprintw 0 0 "Controls")
+		 (mvprintw 1 0 (make-string *screen-width* :initial-element #\-))
+		 (mvprintw 2 0 "h - left")
+		 (mvprintw 3 0 "j - down")
+		 (mvprintw 4 0 "k - up")
+		 (mvprintw 5 0 "l - right")
+		 (mvprintw 6 0 "y - diagonal up left")
+		 (mvprintw 7 0 "u - diagonal up right")
+		 (mvprintw 8 0 "b - diagonal down left")
+		 (mvprintw 9 0 "n - diagonal down right")
+		 (mvprintw 11 0 "s - separate")
+		 (mvprintw 12 0 "d - rotate counterclockwise")
+		 (mvprintw 13 0 "f - rotate clockwise")
+		 (mvprintw 14 0 "g - gather")
+		 (mvprintw 16 0 "i - inventory")
+		 (mvprintw 17 0 ", - pickup")
+		 (mvprintw 18 0 "; - look")
+		 (mvprintw 19 0 "m - menu")))
+  (mvprintw *screen-height* 0 "Type \"q\" to exit help")
+  (while (not (eq (take-in-char) #\q))
+	nil))
 
 (defun main-menu ()
   (erase)
@@ -1475,8 +1642,8 @@
 			((or (eq in #\Space) (eq in #\Return) (eq in #\Newline))
 			 (process-input (cdr (assoc cursor-pos options))))
 			((eq in #\?)
-			 ;; FIXME: display help
-			 t)
+			 (help)
+			 (main-menu))
 			((or (eq in #\n) (eq in #\N))
 			 (new-game)
 			 nil)
