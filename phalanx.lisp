@@ -70,10 +70,12 @@
 		(random-deviation num)
 		chosen)))
 
-(defun bound (num boundary)
+(defun bound (num boundary &optional (lower-limit nil))
   (if (> num boundary)
 	  boundary
-	  num))
+	  (if (and lower-limit (< num lower-limit))
+		  lower-limit
+		  num)))
 
 ;;; Name generator
 
@@ -107,8 +109,12 @@
 
 (defclass item (obj)
   ((pickup :initform t)
-   (use :initform (lambda (a b) t) :initarg :use :accessor get-use)
-   (one-use :initform t :initarg :one-use :accessor one-use-p)))
+   (use :initform '(lambda (i p hp) t) :initarg :use :accessor get-use)
+   (one-use :initform t :initarg :one-use :accessor one-use-p)
+   (takes-turn :initform nil :initarg :takes-turn :accessor takes-turn-p)
+   (atk-bonus :initform 0 :initarg :atk-bonus :accessor get-atk-bonus)
+   (def-bonus :initform 0 :initarg :def-bonus :accessor get-def-bonus)
+   (max-hp-bonus :initform 0 :initarg :max-hp-bonus :accessor get-max-hp-bonus)))
 
 (init-print item '(x y char name color blocks blocks-sight pickup))
 
@@ -202,23 +208,44 @@
 
 (defmethod atk ((mon monster))
   (defun bonus-atk (mon)
-	0;; (reduce '+ (mapcar #'get-atk-bonus (equipment mon)))
-	)
+	(if (typep mon 'player)
+		(+ (if (get-inv (get-p1 mon))
+			   (reduce #'max (mapcar #'get-atk-bonus (get-inv (get-p1 mon))))
+			   0)
+		   (if (get-inv (get-p2 mon))
+			   (reduce #'max (mapcar #'get-atk-bonus (get-inv (get-p2 mon))))
+			   0))
+		0))
   (+ (get-atk mon) (bonus-atk mon)))
 
 (defmethod def ((mon monster))
   (defun bonus-def (mon)
-	0
-	;; (reduce '+ (mapcar #'get-def-bonus (equipment mon)))
-	)
+	(if (typep mon 'player)
+		(+ (if (get-inv (get-p1 mon))
+			   (reduce #'max (mapcar #'get-def-bonus (get-inv (get-p1 mon))))
+			   0)
+		   (if (get-inv (get-p2 mon))
+			   (reduce #'max (mapcar #'get-def-bonus (get-inv (get-p2 mon))))
+			   0))
+		0))
   (+ (get-def mon) (bonus-def mon)))
 
 (defmethod max-hp ((mon monster))
   (defun bonus-max-hp (mon)
-	0
-	;; (reduce '+ (mapcar #'get-max-hp-bonus (equipment mon)))
-	)
+	(if (typep mon 'player)
+		(+ (if (get-inv (get-p1 mon))
+			   (reduce #'max (mapcar #'get-max-hp-bonus (get-inv (get-p1 mon))))
+			   0)
+		   (if (get-inv (get-p2 mon))
+			   (reduce #'max (mapcar #'get-max-hp-bonus (get-inv (get-p2 mon))))
+			   0))
+		0))
   (+ (get-max-hp mon) (bonus-max-hp mon)))
+
+(defmethod deal-damage ((mon monster) dam)
+  (setf (get-hp mon) (- (get-hp mon) dam))
+  (if (<= (get-hp mon) 0)
+	  (kill-monster mon)))
 
 (defmethod attack ((attacker monster) (defender monster))
   "Have the attacker monster perform an attack on the defender monster"
@@ -226,9 +253,7 @@
   (let ((hit-p (< (random 1.0) (/ (atk attacker) (+ (atk attacker) (def defender)))))
 		(damage (+ (random 3) (round (/ (atk attacker) (def defender))))))
 	(cond (hit-p (format-message ("~A attacks ~A for ~A damage!" (get-name attacker) (get-name defender) damage) :color :cred)
-				 (setf (get-hp defender) (- (get-hp defender) damage))
-				 (if (<= (get-hp defender) 0)
-					 (kill-monster defender)))
+				 (deal-damage defender damage))
 		  (t (format-message ("~A lunges at ~A and misses!" (get-name attacker) (get-name defender)) :color :cred)))))
 
 (defmethod move-mon ((mon monster) dx dy)
@@ -278,20 +303,50 @@
   (:documentation "Pick up the item where the monster is standing"))
 
 (defmethod pickup ((p half-player))
-  (let ((objs (remove-if-not (lambda (obj) (and (= (get-x obj) (get-x p))
-  												(= (get-y obj) (get-y p))
-  												(pickup-p obj)))
-  							 *objects*)))
-  	(when (not (null (car objs)))
-	  (push (car objs) (get-inv p))
-	  (setf *objects* (delete (car objs) *objects* :count 1)))
-	(car objs)))
+  (if (< (length (get-inv p)) *inventory-size*)
+	  (let ((objs (remove-if-not (lambda (obj) (and (= (get-x obj) (get-x p))
+													(= (get-y obj) (get-y p))
+													(pickup-p obj)))
+								 *objects*)))
+		(when (not (null (car objs)))
+		  (push (car objs) (get-inv p))
+		  (setf *objects* (delete (car objs) *objects* :count 1)))
+		(car objs))
+	  (progn (message "Inventory full")
+			 nil)))
 
 (defmethod drop-item ((i item) (p half-player))
   (setf (get-x i) (get-x p))
   (setf (get-y i) (get-y p))
   (push i *objects*)
   (setf (get-inv p) (delete i (get-inv p) :count 1)))
+
+(defmethod throw-item ((p half-player) direction distance damage &key (hit-message "~A got hit") (hit-message-color :cwhite) to-drop)
+  (let ((path (points (make-instance 'line
+									 :x1 (get-x p) :y1 (get-y p)
+									 :x2 (bound (+ (get-x p) (* (car direction) distance)) (- *screen-width* 1) 1) :y2 (bound (+ (get-y p) (* (cdr direction) distance)) (- *screen-height* 1) 1))))
+		hit)
+	(dolist (pt path)
+	  (move (cdr pt) (car pt))
+	  (when (blocks-p (aref *map* (car pt) (cdr pt)))
+		(message "Hit a wall" :color hit-message-color)
+		(return))
+	  (dolist (mon (remove-if-not (lambda (obj) (typep obj 'monster)) *objects*))
+		(when (and (= (get-x mon) (car pt))
+				   (= (get-y mon) (cdr pt)))
+		  (deal-damage mon damage)
+		  (format-message (hit-message (get-name mon)) :color hit-message-color)
+		  (setf hit t)))
+	  (when hit
+		(when to-drop
+		  (setf (get-x to-drop) (car pt))
+		  (setf (get-y to-drop) (cdr pt))
+		  (push to-drop *objects*))
+		(return)))
+	(when (and (not hit) to-drop)
+	  (setf (get-x to-drop) (bound (+ (get-x p) (* (car direction) distance)) (- *screen-width* 1) 1))
+	  (setf (get-y to-drop) (bound (+ (get-y p) (* (cdr direction) distance)) (- *screen-height* 1) 1))
+	  (push to-drop *objects*))))
 
 (defmethod check-for-mon-attack ((p half-player) dx dy)
   "Attacks space where player would have moved to if possible"
@@ -314,8 +369,8 @@
 
 (init-print player '(p1 p2 name lvl dlvl exp x y hp max-hp attack defense ai death))
 
-(defmethod use-item ((i item) (p player))
-  (funcall (coerce (get-use i) 'function) i p))
+(defmethod use-item ((i item) (p player) (hp half-player))
+  (funcall (coerce (get-use i) 'function) i p hp))
 
 (defmethod threshold ((p player))
   (expt 10 (get-lvl p)))
@@ -719,6 +774,8 @@
 
 (defconstant *max-iterations* 3)
 
+(defconstant *inventory-size* 5)
+
 (defconstant *fov-radius* 5)
 
 (defparameter *map* (make-array (list *screen-width* *screen-height*)))
@@ -803,7 +860,7 @@
   (big-open-level)
 
   ;; Generate monsters
-  (dotimes (n (+ 5 (random 6))) ; Between 5 and 10
+  (dotimes (n (+ (get-dlvl *player*) 3 (random 5)))
 	(let ((x (random *screen-width*))
 		  (y (random *screen-height*)))
 	  (while (or (blocked-p x y)
@@ -831,7 +888,7 @@
 			*objects*)))
   
   ;; Generate items
-  (dotimes (n (+ 3 (random 5))) ; Between 3 and 7
+  (dotimes (n (+ 3 (get-dlvl *player*) (random 5))) ; Between 3 and 7
 	(let ((x (random *screen-width*))
 		  (y (random *screen-height*)))
 	  (while (blocks-p (aref *map* x y))
@@ -841,17 +898,40 @@
 												:name "Healing Draught"
 												:char #\!
 												:color :cpurple
-												:use '(lambda (i p)
+												:use '(lambda (i p hp)
 													   (setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
 												:one-use t)
-								 ;; (make-instance 'item :x ,x :y ,y
-								 ;; 				:name "Scutum"
-								 ;; 				:char #\[
-								 ;; 				:color :cred)
+								 (make-instance 'item :x ,x :y ,y
+								 				:name "Scutum (shield)"
+								 				:char #\[
+								 				:color :cred
+												:def-bonus 3)
 								 ;; (make-instance 'item :x ,x :y ,y
 								 ;; 				:name "Bow"
 								 ;; 				:char #\)
 								 ;; 				:color :cbrown)
+								 (make-instance 'item :x ,x :y ,y
+												:name "Pilum (javelin)"
+												:atk-bonus 5
+												:char #\)
+												:color :cbrown
+												:use '(lambda (i p hp)
+													   (throw-item hp (take-in-direction) 3 (+ 5 (* (atk p) (random 3))) :hit-message "The pilum severely pierced ~A"))
+												:one-use t
+												:takes-turn t)
+								 (make-instance 'item :x ,x :y ,y
+												:name "Verutum (javelin)"
+												:atk-bonus 1
+												:char #\)
+												:color :cyellow
+												:use '(lambda (i p hp)
+													   (throw-item hp (take-in-direction) 5 (+ 2 (atk p)) :hit-message "The verutum poked ~A" :to-drop i))
+												:one-use t
+												:takes-turn t)
+								 ;; (make-instance 'item :x ,x :y ,y
+								 ;; 				:name "Gladius (sword)")
+								 ;; (make-instance 'item :x ,x :y ,y
+								 ;; 				:name "Pugio (dagger)")
 								 )))
 			*objects*)))
   
@@ -1108,7 +1188,47 @@
 
 ;;; Pathfinding
 
-(defun dijkstra-map (&rest sources) 
+(defun dijkstra-map (&rest sources)
+  ;; (defun dmap (conns &optional (default 0))
+  ;; 	(let* ((source (car conns))
+  ;; 		   (path-lengths (make-array (list *screen-width* *screen-height*)))
+  ;; 		   (last source)
+  ;; 		   (known (list (cons (car source) (cdr source))))
+  ;; 		   selectable)
+  ;; 	  (setf (aref path-lengths (car source) (cdr source)) default)
+  ;; 	  (dolist (c (cdr conns))
+  ;; 		(let ((pt (car c)))
+  ;; 		  (when (and (not (member pt known :test #'equal))
+  ;; 					 (not (blocked-p (car pt) (cdr pt))))
+  ;; 			(setf (aref path-lengths (car pt) (cdr pt)) (+ default 1))
+  ;; 			(push pt selectable))))
+  ;; 	  (dostep (x (- (car source) 1) (+ (car source) 1))
+  ;; 			  (dostep (y (- (cdr source) 1) (+ (cdr source) 1))
+  ;; 					  (when (and (not (member (cons x y) known :test #'equal))
+  ;; 								 (not (blocked-p x y)))
+  ;; 						(setf (aref path-lengths x y) (+ default 1))
+  ;; 						(setf selectable (cons (cons x y) selectable)))))
+  ;; 	  (while selectable
+  ;; 		(let* ((min-len (reduce #'min
+  ;; 								(mapcar
+  ;; 								 (lambda (x) (aref path-lengths (car x) (cdr x)))
+  ;; 								 (remove-if-not #'identity selectable))))
+  ;; 			   (selected (random-list (remove-if-not
+  ;; 									   (lambda (x) (= (aref path-lengths (car x) (cdr x)) min-len))
+  ;; 									   selectable))))
+  ;; 		  (setf selectable (delete selected selectable :test #'equal))
+  ;; 		  (dostep (x (- (car selected) 1) (+ (car selected) 1))
+  ;; 			(dostep (y (- (cdr selected) 1) (+ (cdr selected) 1))
+  ;; 					(when (and (not (member (cons x y) known :test #'equal))
+  ;; 							   (not (blocked-p x y))
+  ;; 							   (not (and (= x (car selected)) (= y (cdr selected)))))
+  ;; 					  (if (not (aref path-lengths x y))
+  ;; 						  (setf (aref path-lengths x y) (+ (aref path-lengths (car selected) (cdr selected)) 1))
+  ;; 						  (setf (aref path-lengths x y) (min (+ (aref path-lengths (car selected) (cdr selected)) 1) (aref path-lengths x y))))
+  ;; 					  (setf selectable (cons (cons x y) selectable)))))
+  ;; 		  (setf last selected)
+  ;; 		  (setf known (cons selected known))))
+  ;; 	  path-lengths))
   (defun dmap (source &optional (default 0))
 	(let ((path-lengths (make-array (list *screen-width* *screen-height*))) (last source) (known (list (cons (car source) (cdr source)))) selectable)
 	  (setf (aref path-lengths (car source) (cdr source)) default)
@@ -1116,7 +1236,7 @@
 			  (dostep (y (- (cdr source) 1) (+ (cdr source) 1))
 					  (when (and (not (member (cons x y) known :test #'equal))
 								 (not (blocked-p x y)))
-						(setf (aref path-lengths x y) 1)
+						(setf (aref path-lengths x y) (+ default 1))
 						(setf selectable (cons (cons x y) selectable)))))
 	  (while selectable
 		(let* ((min-len (reduce #'min
@@ -1139,11 +1259,28 @@
 		  (setf last selected)
 		  (setf known (cons selected known))))
 	  path-lengths))
+
+  ;; (defun get-connections (source)
+  ;; 	"Get all the connections for *map* branching out from source into a list, where each point has connections represented by a cons pair where the car is the point and the cdr is a list of the connection structures for points it's connected to"
+	
+  ;; 	(let ((known (list (cons (car source) (cdr source)))))
+  ;; 	  (defun get-connection-structure (start)
+  ;; 		(let (one-away-connections)
+  ;; 		  (dostep (x (- (car start) 1) (+ (car start) 1))
+  ;; 				  (dostep (y (- (cdr start) 1) (+ (cdr start) 1))
+  ;; 						  (when (and (not (member (cons x y) known :test #'equal))
+  ;; 									 (not (blocked-p x y)))
+  ;; 							(push (cons x y) known)
+  ;; 							(push (get-connection-structure (cons x y)) one-away-connections)
+  ;; 							(push (cons x y) selectable))))
+  ;; 		  (cons (cons (car start) (cdr start))
+  ;; 				one-away-connections)))
+  ;; 	  (get-connection-structure source)))
   
   (let ((map (make-array (list *screen-width* *screen-height*))))
   	(dolist (src sources)
   	  (let ((temp (if (consp (cdr src))
-					  (dmap (cdr src) (car src)) ;Each source is a cons pair consisting of the default value for that source followed by a point or just a point
+					  (dmap (cdr src) (car src)) ;Each source is either a cons pair consisting of the default value for that source followed by a point or just a point
 					  (dmap src))))
   		(dotimes (x (- *screen-width* 1))
   		  (dotimes (y (- *screen-height* 1))
@@ -1235,7 +1372,7 @@
 										 ""))
   (attroff color))
 
-;;; Input
+;;; Menus and Input
 
 (defun take-in-char ()
   (curses-code-char (wgetch *stdscr*)))
@@ -1267,7 +1404,8 @@
 		((eq in #\g)
 		 (gather-player))
 		((eq in #\i)
-		 (inventory))
+		 (inventory)
+		 (input))
 		((eq in #\,)
 		 (pickup *player*))
 		((eq in #\;)
@@ -1280,10 +1418,38 @@
 		 (up *player*)
 		 (input))
 		((or (eq in #\Escape) (eq in #\m))
-		 (main-menu)
-		 (input))))
+		 (when (not (eq (main-menu) 'quit))
+		   (input)))))
 
-;;; Menus
+(defun take-in-direction ()
+  (mvprintw (+ 1 *screen-height*) 0 (make-string *screen-width* :initial-element #\Space))
+  (mvprintw (+ 1 *screen-height*) 0 "What direction?")
+  (let ((in (take-in-char)))
+	(cond ((eq in #\j)
+		   (cons 0 1))
+		  ((eq in #\k)
+		   (cons 0 -1))
+		  ((eq in #\h)
+		   (cons -1 0))
+		  ((eq in #\l)
+		   (cons 1 0))
+		  ((eq in #\y)
+		   (cons -1 -1))
+		  ((eq in #\u)
+		   (cons 1 -1))
+		  ((eq in #\b)
+		   (cons -1 1))
+		  ((eq in #\n)
+		   (cons 1 1))
+		  ;; ((eq in #\s)
+		  ;;  (separate-player))
+		  ;; ((eq in #\d)
+		  ;;  (rotate-player 'counter))
+		  ;; ((eq in #\f)
+		  ;;  (rotate-player 'clockwise))
+		  ;; ((eq in #\g)
+		  ;;  (gather-player))
+		  )))
 
 (defun look ()
   "Look functions similarly to a menu, in that it blocks input"
@@ -1367,7 +1533,7 @@
 	(dolist (obj (cdr selectable))
 	  (mvprintw (+ 1 i) 20 (get-name obj))
 	  (setf i (+ 1 i)))
-	(dotimes (i *screen-height*)
+	(dotimes (i (+ 1 *inventory-size*))
 	  (mvprintw i 19 "|"))
 	(stats)
 
@@ -1399,7 +1565,7 @@
 	  (dolist (obj (cdr selectable))
 		(mvprintw (+ 1 i) 20 (get-name obj))
 		(setf i (+ 1 i)))
-	  (dotimes (i *screen-height*)
+	  (dotimes (i (+ 1 *inventory-size*))
 		(mvprintw i 19 "|"))
 	  (stats))
 	
@@ -1423,30 +1589,30 @@
 														(- (car num-selections) 1)
 														(- (cdr num-selections) 1)))))
 			((eq in #\a)
-			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
-															 (get-p1 *player*)
-															 (get-p2 *player*))))))
-			   (use-item (nth (car cursor)
-							  (get-inv (if (= (cdr cursor) 0)
-										   (get-p1 *player*)
-										   (get-p2 *player*))))
-						 *player*)
-			   (if (one-use-p (nth (car cursor)
-								   (get-inv (if (= (cdr cursor) 0)
-												(get-p1 *player*)
-												(get-p2 *player*)))))
-				   (setf (get-inv (if (= (cdr cursor) 0)
-									  (get-p1 *player*)
-									  (get-p2 *player*)))
-						 (delete (nth (car cursor)
-									  (get-inv (if (= (cdr cursor) 0)
-												   (get-p1 *player*)
-												   (get-p2 *player*))))
-								 (get-inv (if (= (cdr cursor) 0)
-											  (get-p1 *player*)
-											  (get-p2 *player*)))
-								 :count 1)))
-			   (refresh-inventory)))
+			 (let ((it (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
+													 (get-p1 *player*)
+													 (get-p2 *player*))))))
+			   (when (not (null i))
+				   (erase)
+				   (render-all)
+				   (refresh)
+				   (use-item it
+							 *player*
+							 (if (= (cdr cursor) 0)
+								 (get-p1 *player*)
+								 (get-p2 *player*)))
+				   (if (one-use-p it)
+					   (setf (get-inv (if (= (cdr cursor) 0)
+										  (get-p1 *player*)
+										  (get-p2 *player*)))
+							 (delete it
+									 (get-inv (if (= (cdr cursor) 0)
+												  (get-p1 *player*)
+												  (get-p2 *player*)))
+									 :count 1)))
+				   (refresh-inventory)
+				   (when (takes-turn-p it)
+					 (return)))))
 			((eq in #\d)
 			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
 															 (get-p1 *player*)
@@ -1458,9 +1624,13 @@
 			   
 			   (refresh-inventory)))
 			((eq in #\t)
-			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
-															 (get-p1 *player*)
-															 (get-p2 *player*))))))
+			 (when (and (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
+																  (get-p1 *player*)
+																  (get-p2 *player*))))))
+						(< (length (get-inv (if (= (cdr cursor) 0)
+												(get-p2 *player*)
+												(get-p1 *player*))))
+						   *inventory-size*))
 			   (let ((it (nth (car cursor)
 							  (get-inv (if (= (cdr cursor) 0)
 										   (get-p1 *player*)
