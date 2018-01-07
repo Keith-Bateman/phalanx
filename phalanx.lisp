@@ -63,6 +63,20 @@
 (defun random-list (lst)
   (nth (random (length lst)) lst))
 
+(defun random-list-weighted (lst)
+  (let ((num (random 100))
+		(weights 0)
+		(retval nil))
+	(mapcar (lambda (elem) (if (< num (+ weights (car elem)))
+							   (progn (setf retval (cdr elem))
+									  (setf num 101))
+							   (setf weights (+ weights (car elem)))))
+			lst)
+	retval))
+
+(defun random-probability (&optional (percentage 50))
+  (< (random 100) percentage))
+
 (defun random-deviation (num &key (zero-p nil))
   (let ((chosen (- (random (+ 1 (* 2 num))) num)))
 	(if (and (not zero-p)
@@ -118,8 +132,6 @@
 
 (init-print item '(x y char name color blocks blocks-sight pickup))
 
-;; list of roman enemies '(gladiator slave hun visigoth persian goth vandal carthaginian greek)
-;; list of fantastical enemies '()
 (defclass monster (obj)
   ((hp :initarg :hp :accessor get-hp)
    (max-hp :accessor get-max-hp)
@@ -159,13 +171,17 @@
 												:x2 (get-x (get-p1 *player*)) :y2 (get-y (get-p1 *player*))))) 2)
 			  (> (length (points (make-instance 'line :x1 (get-x mon) :y1 (get-y mon)
 												:x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))) 2)
-			  (not (null (dijkstra-path (apply #'dijkstra-map (append (list (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
-																			(cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
-																	  *goals*))
+			  (not (null (dijkstra-path (apply #'dijkstra-map (append (list (cons (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+																				  (cons (get-x mon) (get-y mon)))
+																			(cons (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*)))
+																				  (cons (get-x mon) (get-y mon))))
+																	  (mapcar (lambda (g) (cons g (cons (get-x mon) (get-y mon)))) *goals*)))
 										(cons (get-x mon) (get-y mon))))))
-		 (let ((path (dijkstra-path (apply #'dijkstra-map (append (list (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
-																		(cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))
-																  *goals*))
+		 (let ((path (dijkstra-path (apply #'dijkstra-map (append (list (cons (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+																			  (cons (get-x mon) (get-y mon)))
+																		(cons (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*)))
+																			  (cons (get-x mon) (get-y mon))))
+																  (mapcar (lambda (g) (cons g (cons (get-x mon) (get-y mon)))) *goals*)))
 									(cons (get-x mon) (get-y mon)))))
 		   (move-mon mon (- (car path) (get-x mon)) (- (cdr path) (get-y mon)))
 		 ;; Chase
@@ -267,32 +283,23 @@
 
 (defclass leader (monster)
   ((goals :initform nil :initarg :goals :accessor get-goals)
-   (ai :initform 'square-leader-ai :initarg :ai :accessor get-ai)
+   (ai :initform 'self-leader-ai :initarg :ai :accessor get-ai)
    (death :initform 'leader-death :initarg :death :accessor get-death)))
 
 (init-print leader '(x y char name color blocks blocks-sight pickup hp max-hp attack defense ai death goals))
 
 (defmethod add-goal ((l leader) goal)
-  (setf (get-goals l) (cons goal (get-goals l)))
+  (push goal (get-goals l))
   (if (member goal *goals* :test #'equal)
 	  goals
-	  (setf *goals* (cons goal *goals*))))
+	  (push goal *goals*)))
 
-(defmethod square-leader-ai ((l leader))
+(defmethod self-leader-ai ((l leader))
   (setf *goals* (remove-if (lambda (x) (member x (get-goals l)))
 						   *goals*))
+  (basic-ai l) ; Basic AI is used to give easy run-away functionality
   (setf (get-goals l) nil) ; Reset goals for better or worse
-  (mapcar (lambda (pt)
-			(add-goal l (cons 0.5 pt)))
-		  (delete (cons (get-x l) (get-y l))
-				  (remove-if (lambda (pt) (blocked-p (car pt) (cdr pt))) (points-within 1 (cons (get-x l) (get-y l))))
-				  :test #'equal))
-  (cond ((or (<= (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
-												:x2 (get-x (get-p1 *player*)) :y2 (get-y (get-p1 *player*))))) 2)
-			 (<= (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
-												:x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))) 2))
-		 (attack l *player*))))
-
+  (add-goal l (cons (get-x l) (get-y l))))
 
 (defclass half-player (monster)
   ((inventory :initform nil :initarg :inv :accessor get-inv)))
@@ -321,7 +328,17 @@
   (push i *objects*)
   (setf (get-inv p) (delete i (get-inv p) :count 1)))
 
-(defmethod throw-item ((p half-player) direction distance damage &key (hit-message "~A got hit") (hit-message-color :cwhite) to-drop)
+(defmethod power-strike ((p half-player) direction damage &key (hit-message "~A gets hit") (hit-message-color :cwhite))
+  "A super-powered attack"
+  (mapcar (lambda (mon)
+			(deal-damage mon damage)
+			(format-message (hit-message (get-name mon)) :color hit-message-color))
+		  (remove-if-not (lambda (obj) (and (typep obj 'monster)
+											(= (get-x obj) (+ (get-x p) (car direction)))
+											(= (get-y obj) (+ (get-y p) (cdr direction)))))
+						 *objects*)))
+
+(defmethod throw-item ((p half-player) direction distance damage &key (hit-message "~A gets hit") (hit-message-color :cwhite) to-drop)
   (let ((path (points (make-instance 'line
 									 :x1 (get-x p) :y1 (get-y p)
 									 :x2 (bound (+ (get-x p) (* (car direction) distance)) (- *screen-width* 1) 1) :y2 (bound (+ (get-y p) (* (cdr direction) distance)) (- *screen-height* 1) 1))))
@@ -744,18 +761,7 @@
 	(when (not (null pt))
 	  (setf (lit (aref *map* (car pt) (cdr pt))) t)
 	  (when (not (explored-p (aref *map* (car pt) (cdr pt))))
-		(setf (explored-p (aref *map* (car pt) (cdr pt))) t))))
-  ;; (dolist (pt (points ln))
-  ;; 	(setf (lit (aref *map* (car pt) (cdr pt))) t)
-  ;; 	(when (not (explored-p (aref *map* (car pt) (cdr pt))))
-  ;; 	  (setf (explored-p (aref *map* (car pt) (cdr pt))) t))
-  ;; 	(when (member t (cons (blocks-sight-p (aref *map* (car pt) (cdr pt)))
-  ;; 						  (mapcar #'blocks-sight-p
-  ;; 								  (remove-if-not (lambda (obj) (and (= (get-x obj) (car pt))
-  ;; 																	(= (get-y obj) (cdr pt))))
-  ;; 												 *objects*))))
-  ;; 	  (return t)))
-  )
+		(setf (explored-p (aref *map* (car pt) (cdr pt))) t)))))
 
 
 (defclass message ()
@@ -768,6 +774,8 @@
 
 (defconstant *screen-width* 50)
 (defconstant *screen-height* 20)
+
+(defconstant *class-list* '(tile obj monster player half-player leader item shape rect line message))
 
 (defconstant *max-room-size* 20)
 (defconstant *min-room-size* 10)
@@ -854,105 +862,243 @@
 			(make-instance 'tile :blocks t))))
 
   (defun two-corridor-level ()
-	;; TODO: This will be a level with two separate corridors, forcing the player to split his force
-	(direct-dungeon :windyness (random 20) :roughness (random 20) :complexity 2))
+	(let ((displacement (random 4)))
+	  (direct-dungeon :windyness (random 10) :roughness (random 10) :stair nil :ystart (+ 1 displacement) :hstart 3)
+	  (direct-dungeon :windyness (random 10) :roughness (random 10) :stair nil :ystart (- *screen-height* 6 displacement) :hstart 3)
+	  (push (make-instance 'obj :x 1 :y (+ 2 displacement) :name "upstair" :char #\<) *objects*)
+	  (push (make-instance 'obj :x 1 :y (- *screen-height* 6 displacement) :name "upstair" :char #\<) *objects*)
+	  (when (eq stair 'up)
+		(setf (get-x (get-p1 *player*)) 1)
+		(setf (get-y (get-p1 *player*)) (+ 2 displacement))
+		(setf (get-x (get-p2 *player*)) 1)
+		(setf (get-y (get-p2 *player*)) (- *screen-height* 6 displacement)))
+	  (let* ((y1 (dotimes (y *screen-height*)
+	  			   (when (not (blocks-p (aref *map* (- *screen-width* 2) y)))
+	  				 (return y))))
+	  		 (y2 (dostep (y (- *screen-height* 2) 1 -1)
+	  		 			 (when (and (not (blocks-p (aref *map* (- *screen-width* 2) y)))
+	  		 						(> (- y y1) 1)
+	  		 						(evenp (- y y1)))
+	  		 			   (return y)))))
+	  	(when (eq stair 'down)
+	  	  (setf (get-x (get-p1 *player*)) (- *screen-width* 2))
+	  	  (setf (get-y (get-p1 *player*)) y1)
+	  	  (setf (get-x (get-p2 *player*)) (- *screen-width* 2))
+	  	  (setf (get-y (get-p2 *player*)) y2))
+	  	(push (make-instance 'obj
+	  						 :x (- *screen-width* 2) :y y1
+	  						 :name "downstair" :char #\>)
+	  		  *objects*)
+	  	(push (make-instance 'obj :x (- *screen-width* 2) :y y2
+	  						 :name "downstair" :char #\>)
+	  		  *objects*))))
+  
+  ;; Generate map
+  (eval (random-list-weighted (list (cons 80 '(big-open-level))
+									(cons 20 '(two-corridor-level)))))
 
-  (big-open-level)
-
+  ;; WARNING: Numbers not playtested, balance unlikely
+  
   ;; Generate monsters
   (dotimes (n (+ (get-dlvl *player*) 3 (random 5)))
-	(let ((x (random *screen-width*))
-		  (y (random *screen-height*)))
-	  (while (or (blocked-p x y)
-				 (and (= x (get-x (get-p1 *player*)))
-					  (= y (get-y (get-p1 *player*))))
-				 (and (= x (get-x (get-p2 *player*)))
-					  (= y (get-y (get-p2 *player*)))))
-		(setf x (random *screen-width*))
-		(setf y (random *screen-height*)))
-	  (push (eval (random-list `((make-instance 'monster :x ,x :y ,y
-												:hp (+ 20 (random-deviation 3 :zero-p t))
-												:atk (+ 6 (random-deviation 1 :zero-p t))
-												:def (+ 3 (random-deviation 1 :zero-p t))
-												:name "goth" :char #\g :color :cpurple :blocks t)
-								 (make-instance 'monster :x ,x :y ,y
-												:hp (+ 10 (random-deviation 1 :zero-p t))
-												:atk 2
-												:def 2
-												:name "slave" :char #\s :blocks t)
-								 (make-instance 'monster :x ,x :y ,y
-												:hp (+ 15 (random-deviation 4 :zero-p t))
-												:atk (+ 3 (random-deviation 2 :zero-p t))
-												:def (+ 6 (random-deviation 2 :zero-p t))
-												:name "greek" :char #\g :color :cgreen :blocks t))))
-			*objects*)))
+  	(let ((x (random *screen-width*))
+  		  (y (random *screen-height*)))
+  	  (while (or (blocked-p x y)
+  				 (and (= x (get-x (get-p1 *player*)))
+  					  (= y (get-y (get-p1 *player*))))
+  				 (and (= x (get-x (get-p2 *player*)))
+  					  (= y (get-y (get-p2 *player*)))))
+  		(setf x (random *screen-width*))
+  		(setf y (random *screen-height*)))
+	  (let ((monster-list (cond ((< (get-dlvl *player*) 4) ; Monster set dlvl 1+
+								 (list (cons 20 `(make-instance 'monster :x ,x :y ,y
+																:hp (+ 20 (random-deviation 3 :zero-p t))
+																:atk (+ 6 (random-deviation 1 :zero-p t))
+																:def (+ 3 (random-deviation 1 :zero-p t))
+																:name "goth" :char #\g :color :cpurple :blocks t))
+									   (cons 50 `(make-instance 'monster :x ,x :y ,y
+																:hp (+ 10 (random-deviation 1 :zero-p t))
+																:atk 2
+																:def 2
+																:name "slave" :char #\s :blocks t))
+									   (cons 30 `(make-instance 'monster :x ,x :y ,y
+																:hp (+ 15 (random-deviation 4 :zero-p t))
+																:atk (+ 3 (random-deviation 2 :zero-p t))
+																:def (+ 6 (random-deviation 2 :zero-p t))
+																:name "greek" :char #\g :color :cgreen :blocks t))))
+								((< (get-dlvl *player*) 7) ; Monster set dlvl 4+
+								 (error "Haven't yet created all monsters for dlvl 4+")
+								 
+								 (list (cons 10 `(make-instance 'monster :x ,x :y ,y
+																:hp (+ 50 (random-deviation 10 :zero-p t))
+																:name "Gladiator")) ; Slave+
+									   (cons 10 `(make-instance 'monster :x ,x :y ,y
+																:name "Visigoth")) ; Goth+
+									   (cons 10 `(make-instance 'monster :x ,x :y ,y
+																:name "Persian")) ; Greek+
+									   (cons 10 `(make-instance 'monster :x ,x :y ,y
+																:name "Vandal"))))
+								(t
+								 (error "Haven't yet created all monsters for dlvl 7+")
+								 (list (cons 10 `(make-instance 'monster :x ,x :y ,y
+																:hp (+ 50 (random-deviation 10 :zero-p t))
+																:name "Gladiator"))
+									   (cons 10 `(make-instance 'monster :x ,x :y ,y
+																:name "Carthaginian")) ; Greek++
+									   (cons 10 `(make-instance 'monster :x ,x :y ,y
+																:name "Hun")))))))
+		(push (eval (random-list-weighted monster-list))
+			  *objects*))))
   
   ;; Generate items
-  (dotimes (n (+ 3 (get-dlvl *player*) (random 5))) ; Between 3 and 7
+  (dotimes (n (+ 3 (get-dlvl *player*) (random 5)))
 	(let ((x (random *screen-width*))
 		  (y (random *screen-height*)))
 	  (while (blocks-p (aref *map* x y))
 		(setf x (random *screen-width*))
 		(setf y (random *screen-height*)))
-	  (push (eval (random-list `((make-instance 'item :x ,x :y ,y
-												:name "Healing Draught"
-												:char #\!
-												:color :cpurple
-												:use '(lambda (i p hp)
-													   (setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
-												:one-use t)
-								 (make-instance 'item :x ,x :y ,y
-								 				:name "Scutum (shield)"
-								 				:char #\[
-								 				:color :cred
-												:def-bonus 3)
-								 ;; (make-instance 'item :x ,x :y ,y
-								 ;; 				:name "Bow"
-								 ;; 				:char #\)
-								 ;; 				:color :cbrown)
-								 (make-instance 'item :x ,x :y ,y
-												:name "Pilum (javelin)"
-												:atk-bonus 5
-												:char #\)
-												:color :cbrown
-												:use '(lambda (i p hp)
-													   (throw-item hp (take-in-direction) 3 (+ 5 (* (atk p) (random 3))) :hit-message "The pilum severely pierced ~A"))
-												:one-use t
-												:takes-turn t)
-								 (make-instance 'item :x ,x :y ,y
-												:name "Verutum (javelin)"
-												:atk-bonus 1
-												:char #\)
-												:color :cyellow
-												:use '(lambda (i p hp)
-													   (throw-item hp (take-in-direction) 5 (+ 2 (atk p)) :hit-message "The verutum poked ~A" :to-drop i))
-												:one-use t
-												:takes-turn t)
-								 ;; (make-instance 'item :x ,x :y ,y
-								 ;; 				:name "Gladius (sword)")
-								 ;; (make-instance 'item :x ,x :y ,y
-								 ;; 				:name "Pugio (dagger)")
-								 )))
-			*objects*)))
+	  (let ((item-list (cond ((< (get-dlvl *player*) 4) ; Item set dlvl 1+
+							  (list (cons 30 `(make-instance 'item :x ,x :y ,y
+															 :name "Healing Draught"
+															 :char #\!
+															 :color :cpurple
+															 :use '(lambda (i p hp)
+																	(setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
+															 :one-use t))
+									(cons 15 `(make-instance 'item :x ,x :y ,y
+															 :name "Caligae (boots)"
+															 :char #\[
+															 :color :cbrown
+															 :def-bonus 3))
+									(cons 25 `(make-instance 'item :x ,x :y ,y
+															 :name "Pugio (dagger)"
+															 :char #\)
+															 :atk-bonus 1
+															 :one-use (random-probability 70)
+															 :use '(lambda (i p hp)
+																	(power-strike hp (take-in-direction) (+ 5 (random (bound (atk p) 16))) :hit-message "The pugio stabs ~A viciously")
+																	(when (random-probability)
+																	  (setf (one-use-p i) t)))
+															 :takes-turn t
+															 :color :cgray))
+									(cons 30 `(make-instance 'item :x ,x :y ,y
+															 :name "Verutum (javelin)"
+															 :atk-bonus 1
+															 :char #\)
+															 :color :cyellow
+															 :use '(lambda (i p hp)
+																	(throw-item hp (take-in-direction) 3 (+ 1 (random (bound (atk p) 10))) :hit-message "The verutum pokes ~A" :to-drop i))
+															 :one-use t
+															 :takes-turn t))))
+							 ((< (get-dlvl *player*) 7) ; Item set dlvl 4+
+							  (list (cons 25 `(make-instance 'item :x ,x :y ,y
+															 :name "Healing Draught"
+															 :char #\!
+															 :color :cpurple
+															 :use '(lambda (i p hp)
+																	(setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
+															 :one-use t))
+									(cons 15 `(make-instance 'item :x ,x :y ,y
+															 :name "Clipeus (shield)"
+															 :char #\[
+															 :color :ccyan
+															 :def-bonus 9))
+									(cons 10 `(make-instance 'item :x ,x :y ,y
+															 :name "Hasta (spear)"
+															 :char #\)
+															 :color :cbrown
+															 :takes-turn t
+															 ;; Use for a multi-use short-distance attack that won't break the hasta
+															 :atk-bonus 4))
+									(cons 25 `(make-instance 'item :x ,x :y ,y
+															 :name "Pilum (javelin)"
+															 :atk-bonus 5
+															 :char #\)
+															 :color :cbrown
+															 :use '(lambda (i p hp)
+																	(throw-item hp (take-in-direction) 5 (+ 5 (random (bound (atk p) 20))) :hit-message "The pilum severely pierces ~A"))
+															 :one-use t
+															 :takes-turn t))
+									(cons 15 `(make-instance 'item :x ,x :y ,y
+															 :name "Verutum (javelin)"
+															 :atk-bonus 1
+															 :char #\)
+															 :color :cyellow
+															 :use '(lambda (i p hp)
+																	(throw-item hp (take-in-direction) 3 (+ 1 (random (bound (atk p) 10))) :hit-message "The verutum pokes ~A" :to-drop i))
+															 :one-use t
+															 :takes-turn t))
+									(cons 10 `(make-instance 'item :x ,x :y ,y
+															 :name "Gladius (sword)"
+															 :char #\)
+															 :atk-bonus 10
+															 ;; Use for a powerful strike with a chance to break the Gladius
+															 :one-use (random-probability 30)
+															 :takes-turn t
+															 :color :cwhite))))
+							 (t
+							  (error "Haven't yet created all items for dlvl 7+")
+							  (list (cons 10 `(make-instance 'item :x ,x :y ,y
+															 :name "Arcus (bow)"
+															 :char #\)
+															 :color :cbrown
+															 :takes-turn t
+															 :use '(lambda (i p hp)
+																	(throw-item hp (take-in-direction) 7 (+ 3 (random (bound (atk p) 30)) :hit-message "The arrow firmly strikes ~A")))))
+									(cons 10 `(make-instance 'item :x ,x :y ,y
+															 :name "Scutum (shield)"
+															 :char #\[
+															 :color :cred
+															 :takes-turn t
+															 :def-bonus 20
+															 ;; Use for a defensive strike that deals damage based on defense and can break the scutum															 
+															 :one-use (random-probability 20))))))))
+		(push (eval (random-list-weighted item-list)) *objects*)))) ; The reason for this trick is so that only the selection is evaluated
   
-  ;; Generate leader(s)
-  ;; While this is a great idea, it requires a more efficient algorithm for generating dijkstra maps of more than one point
-  ;; (when (= (random 4) 0)
-  ;; 	(let ((x (random *screen-width*))
-  ;; 		  (y (random *screen-height*)))
-  ;; 	  (while (or (blocked-p x y)
-  ;; 				 (and (= x (get-x (get-p1 *player*)))
-  ;; 					  (= y (get-y (get-p1 *player*))))
-  ;; 				 (and (= x (get-x (get-p2 *player*)))
-  ;; 					  (= y (get-y (get-p2 *player*)))))
-  ;; 		(setf x (random *screen-width*))
-  ;; 		(setf y (random *screen-height*)))
-  ;; 	  (setf *objects* (cons (make-instance 'leader :x x :y y
-  ;; 										   :hp (+ 15 (random 5))
-  ;; 										   :atk (+ 3 (random 3))
-  ;; 										   :def (+ 1 (random 3))
-  ;; 										   :name "Aristotle" :char #\G :color :cgreen :blocks t)
-  ;; 							*objects*))))
+  ;; Generate leader
+  (when (and (< (get-dlvl *player*) 10) (random-probability 25)) ; Each level has a 25% chance of containing a leader
+  	(let ((x (random *screen-width*))
+  		  (y (random *screen-height*)))
+  	  (while (or (blocked-p x y)
+  				 (and (= x (get-x (get-p1 *player*)))
+  					  (= y (get-y (get-p1 *player*))))
+  				 (and (= x (get-x (get-p2 *player*)))
+  					  (= y (get-y (get-p2 *player*)))))
+  		(setf x (random *screen-width*))
+  		(setf y (random *screen-height*)))
+  	  (push (case (get-dlvl *player*)
+			  (1 (make-instance 'leader :x x :y y
+								:hp (+ 15 (random 5))
+								:atk (+ 3 (random 3))
+								:def (+ 1 (random 3))
+								:name "Archimedes" :char #\G :color :cgreen :blocks t)) ; Greek inventor
+			  (2 (make-instance 'leader :x x :y y
+								:hp (+ 25 (random 5))
+								:atk (+ 8 (random 3))
+								:def (+ 4 (random 3))
+								:name "Cniva" :char #\G :color :cpurple :blocks t)) ; King of the Goths
+			  (3 (make-instance 'leader :x x :y y
+								:hp (+ 30 (random 5))
+								:atk (+ 30 (random 5))
+								:def (+ 1 (random 2)) ; Pyrrhus has insane attack, and insanely low defense, making a Pyrrhic victory all too likely
+								:name "Pyrrhus")) ; of Epirus; "Pyrrhic victory"
+			  (4 (make-instance 'leader :x x :y y
+								:name "Alaric")) ; King of the Visigoths
+			  (5 (make-instance 'leader :x x :y y
+								:name "Genseric")) ; King of the Vandals
+			  (6 (make-instance 'leader :x x :y y
+								:name "Shapur")) ; King of the Sassanid Persians
+			  (7 (make-instance 'leader :x x :y y
+								:name "Spartacus")) ; Gladiator
+			  (8 (make-instance 'leader :x x :y y
+								:name "Attila")) ; the Hun
+			  (9 (make-instance 'leader :x x :y y
+								:name "Hannibal"))) ; of Carthage
+			*objects*)))
+
+  ;; TODO: Give "vanguards" to the leaders which are advanced versions of regular units
+  
+  ;; NOTE: dlvl 10 is a special boss level and the end of the game, so that needs to be separated from regular level generation
   )
 
 (defun get-random-rect (x y width height)
@@ -1029,12 +1175,12 @@
 		   (list r)))))
 
 ;; Directional Dungeon Generator
-(defun direct-dungeon (&key (length (- *screen-width* 4)) (roughness 50) (windyness 50) (complexity 1) (stair 'up))
+(defun direct-dungeon (&key (length (- *screen-width* 4)) (roughness 50) (windyness 50) (complexity 1) (stair 'up) (ystart (+ 1 (random (- *screen-height* 10)))) (hstart (+ 3 (random 3))))
   "Generates a cavelike dungeon left to right"
   (let ((x 1)
 		(start 1)
-		(y (+ 1 (random (- *screen-height* 10))))
-		(height (+ 3 (random 3))))
+		(y ystart)
+		(height hstart))
 	(draw (make-instance 'line :x1 x :y1 y :x2 x :y2 (+ y height)))
 	(when (= complexity 1)
 	  (let ((stair-loc (random (- height 2))))
@@ -1133,7 +1279,7 @@
 	  (attron (slot-value obj 'color))
 	  (mvaddch (get-y obj) (get-x obj) (slot-value obj 'char))
 	  (Attroff (slot-value obj 'color))))
-  (dolist (mon (remove-if-not (lambda (obj) (typep obj 'monster)) *objects*))
+  (dolist (mon (remove-if-not (lambda (obj) (and (typep obj 'monster) (not (eq (get-char obj) #\%)))) *objects*))
 	(when (lit (aref *map* (get-x mon) (get-y mon)))
 		 (progn (attron (slot-value mon 'color))
 				(mvaddch (get-y mon) (get-x mon) (slot-value mon 'char))
@@ -1188,100 +1334,51 @@
 
 ;;; Pathfinding
 
-(defun dijkstra-map (&rest sources)
-  ;; (defun dmap (conns &optional (default 0))
-  ;; 	(let* ((source (car conns))
-  ;; 		   (path-lengths (make-array (list *screen-width* *screen-height*)))
-  ;; 		   (last source)
-  ;; 		   (known (list (cons (car source) (cdr source))))
-  ;; 		   selectable)
-  ;; 	  (setf (aref path-lengths (car source) (cdr source)) default)
-  ;; 	  (dolist (c (cdr conns))
-  ;; 		(let ((pt (car c)))
-  ;; 		  (when (and (not (member pt known :test #'equal))
-  ;; 					 (not (blocked-p (car pt) (cdr pt))))
-  ;; 			(setf (aref path-lengths (car pt) (cdr pt)) (+ default 1))
-  ;; 			(push pt selectable))))
-  ;; 	  (dostep (x (- (car source) 1) (+ (car source) 1))
-  ;; 			  (dostep (y (- (cdr source) 1) (+ (cdr source) 1))
-  ;; 					  (when (and (not (member (cons x y) known :test #'equal))
-  ;; 								 (not (blocked-p x y)))
-  ;; 						(setf (aref path-lengths x y) (+ default 1))
-  ;; 						(setf selectable (cons (cons x y) selectable)))))
-  ;; 	  (while selectable
-  ;; 		(let* ((min-len (reduce #'min
-  ;; 								(mapcar
-  ;; 								 (lambda (x) (aref path-lengths (car x) (cdr x)))
-  ;; 								 (remove-if-not #'identity selectable))))
-  ;; 			   (selected (random-list (remove-if-not
-  ;; 									   (lambda (x) (= (aref path-lengths (car x) (cdr x)) min-len))
-  ;; 									   selectable))))
-  ;; 		  (setf selectable (delete selected selectable :test #'equal))
-  ;; 		  (dostep (x (- (car selected) 1) (+ (car selected) 1))
-  ;; 			(dostep (y (- (cdr selected) 1) (+ (cdr selected) 1))
-  ;; 					(when (and (not (member (cons x y) known :test #'equal))
-  ;; 							   (not (blocked-p x y))
-  ;; 							   (not (and (= x (car selected)) (= y (cdr selected)))))
-  ;; 					  (if (not (aref path-lengths x y))
-  ;; 						  (setf (aref path-lengths x y) (+ (aref path-lengths (car selected) (cdr selected)) 1))
-  ;; 						  (setf (aref path-lengths x y) (min (+ (aref path-lengths (car selected) (cdr selected)) 1) (aref path-lengths x y))))
-  ;; 					  (setf selectable (cons (cons x y) selectable)))))
-  ;; 		  (setf last selected)
-  ;; 		  (setf known (cons selected known))))
-  ;; 	  path-lengths))
-  (defun dmap (source &optional (default 0))
-	(let ((path-lengths (make-array (list *screen-width* *screen-height*))) (last source) (known (list (cons (car source) (cdr source)))) selectable)
-	  (setf (aref path-lengths (car source) (cdr source)) default)
-	  (dostep (x (- (car source) 1) (+ (car source) 1))
-			  (dostep (y (- (cdr source) 1) (+ (cdr source) 1))
-					  (when (and (not (member (cons x y) known :test #'equal))
-								 (not (blocked-p x y)))
-						(setf (aref path-lengths x y) (+ default 1))
-						(setf selectable (cons (cons x y) selectable)))))
-	  (while selectable
-		(let* ((min-len (reduce #'min
-								(mapcar
-								 (lambda (x) (aref path-lengths (car x) (cdr x)))
-								 (remove-if-not #'identity selectable))))
-			   (selected (random-list (remove-if-not
-									   (lambda (x) (= (aref path-lengths (car x) (cdr x)) min-len))
-									   selectable))))
-		  (setf selectable (delete selected selectable :test #'equal))
-		  (dostep (x (- (car selected) 1) (+ (car selected) 1))
-			(dostep (y (- (cdr selected) 1) (+ (cdr selected) 1))
-					(when (and (not (member (cons x y) known :test #'equal))
-							   (not (blocked-p x y))
-							   (not (and (= x (car selected)) (= y (cdr selected)))))
-					  (if (not (aref path-lengths x y))
-						  (setf (aref path-lengths x y) (+ (aref path-lengths (car selected) (cdr selected)) 1))
-						  (setf (aref path-lengths x y) (min (+ (aref path-lengths (car selected) (cdr selected)) 1) (aref path-lengths x y))))
-					  (setf selectable (cons (cons x y) selectable)))))
-		  (setf last selected)
-		  (setf known (cons selected known))))
-	  path-lengths))
+(defun dijkstra-map (&rest sources)  
 
-  ;; (defun get-connections (source)
-  ;; 	"Get all the connections for *map* branching out from source into a list, where each point has connections represented by a cons pair where the car is the point and the cdr is a list of the connection structures for points it's connected to"
-	
-  ;; 	(let ((known (list (cons (car source) (cdr source)))))
-  ;; 	  (defun get-connection-structure (start)
-  ;; 		(let (one-away-connections)
-  ;; 		  (dostep (x (- (car start) 1) (+ (car start) 1))
-  ;; 				  (dostep (y (- (cdr start) 1) (+ (cdr start) 1))
-  ;; 						  (when (and (not (member (cons x y) known :test #'equal))
-  ;; 									 (not (blocked-p x y)))
-  ;; 							(push (cons x y) known)
-  ;; 							(push (get-connection-structure (cons x y)) one-away-connections)
-  ;; 							(push (cons x y) selectable))))
-  ;; 		  (cons (cons (car start) (cdr start))
-  ;; 				one-away-connections)))
-  ;; 	  (get-connection-structure source)))
-  
+  ;; NOTE: The inefficiency of this method caused me significant consternation when working with leaders
+  (defun dmap (source &optional (default 0) destination)
+  	(let ((path-lengths (make-array (list *screen-width* *screen-height*)))
+		  (known (list source))
+		  selectable)
+  	  (setf (aref path-lengths (car source) (cdr source)) default)
+  	  (dostep (x (- (car source) 1) (+ (car source) 1))
+  			  (dostep (y (- (cdr source) 1) (+ (cdr source) 1))
+  					  (when (and (not (member (cons x y) known :test #'equal))
+  								 (not (blocked-p x y)))
+  						(setf (aref path-lengths x y) (+ default 1))
+  						(push (cons x y) selectable))))
+  	  (while selectable
+  		(let* ((min-len (reduce #'min
+  								(mapcar
+  								 (lambda (x) (aref path-lengths (car x) (cdr x)))
+  								 (remove-if-not #'identity selectable))))
+  			   (selected (random-list (remove-if-not
+  									   (lambda (x) (= (aref path-lengths (car x) (cdr x)) min-len))
+  									   selectable))))
+  		  (setf selectable (delete selected selectable :test #'equal))
+  		  (dostep (x (- (car selected) 1) (+ (car selected) 1))
+  			(dostep (y (- (cdr selected) 1) (+ (cdr selected) 1))
+  					(when (and (not (member (cons x y) known :test #'equal))
+  							   (not (blocked-p x y))
+  							   (not (and (= x (car selected)) (= y (cdr selected)))))
+  					  (if (not (aref path-lengths x y))
+  						  (setf (aref path-lengths x y) (+ (aref path-lengths (car selected) (cdr selected)) 1))
+  						  (setf (aref path-lengths x y) (min (+ (aref path-lengths (car selected) (cdr selected)) 1) (aref path-lengths x y))))
+  					  (push (cons x y) selectable))))
+  		  (push selected known)
+		  (when (equal selected destination)
+			(return))))
+  	  path-lengths))
+
   (let ((map (make-array (list *screen-width* *screen-height*))))
   	(dolist (src sources)
-  	  (let ((temp (if (consp (cdr src))
-					  (dmap (cdr src) (car src)) ;Each source is either a cons pair consisting of the default value for that source followed by a point or just a point
-					  (dmap src))))
+  	  (let ((temp (cond ((and (consp (car src)) (consp (cdr src)))
+						 (dmap (car src) 0 (cdr src)))
+						((consp (cdr src))
+						 (dmap (cdr src) (car src))) ;Each source is either a cons pair consisting of the default value for that source followed by a point or just a point or two points, a source and destination
+						(t
+						 (dmap src)))))
   		(dotimes (x (- *screen-width* 1))
   		  (dotimes (y (- *screen-height* 1))
   			(cond ((null (aref map x y))
@@ -1740,8 +1837,7 @@
 		(write (cons '*map* *map*) :stream save-file)
 		(write (cons '*objects* *objects*) :stream save-file)
 		(write (cons '*game-state* *game-state*) :stream save-file)
-		(write (cons '*messages* *messages*) :stream save-file))
-	  'quit)
+		(write (cons '*messages* *messages*) :stream save-file)))
 	
 	(defun continue-game ()
 	  "A hairy hack for loading a save game. It's a hairy hack because of CLOS, and I put up with it because of CLOS"
@@ -1749,18 +1845,22 @@
 		"Create a new instance of an object with the given print representation"
 		(let ((new-obj (make-instance (car spec))))
 		  (dolist (slot-pair (cdr spec))
-			(cond ((eq (cdr slot-pair) 'unbound)
+			(cond ((eq (cdr slot-pair) 'unbound) ; This is unbound
 				   (slot-makunbound new-obj (car slot-pair)))
-				  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair))) (not (eq (cadr slot-pair)
-																					  'lambda)))
+				  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair)))
+					(member (cadr slot-pair) *class-list*)) ; This is a class we initialized a printer for
+				   (setf (slot-value new-obj (car slot-pair)) (load-object (cdr slot-pair))))
+				  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair)))
+						(not (eq (cadr slot-pair)
+								 'lambda))) ; This is a list of objects like the inventory
 				   (setf (slot-value new-obj (car slot-pair)) nil)
 				   (dolist (new-spec (cdr slot-pair))
 					 (setf (slot-value new-obj (car slot-pair))
 						   (cons (load-object new-spec) (slot-value new-obj (car slot-pair))))))
-				  ((or (atom (cdr slot-pair)) (and (listp (cdr slot-pair)) (eq (cadr slot-pair) 'lambda)))
+				  ((or (atom (cdr slot-pair)) (and (listp (cdr slot-pair)) (eq (cadr slot-pair) 'lambda))) ; This is an atom or a lambda function
 				   (setf (slot-value new-obj (car slot-pair))
 						 (cdr slot-pair)))))
-		  new-obj))					
+		  new-obj))
 	  
 	  (with-open-file (load-file "phalanx-save.sav"
 								 :direction :input
@@ -1818,14 +1918,15 @@
 			 (new-game)
 			 nil)
 			((or (eq in #\s) (eq in #\S))
-			 (save-game))
+			 (save-game)
+			 (process-input #\q))
 			((or (eq in #\r) (eq in #\R))
 			 (not (resume-game)))
 			((or (eq in #\c) (eq in #\C))
 			 (continue-game)
 			 nil)
 			((or (eq in #\q) (eq in #\Q))
-			 (setf *game-state* nil) ; FIXME: This should probably also delete save files and display a warning prompt
+			 (setf *game-state* nil)
 			 'quit)
 			(t t)))
 	
