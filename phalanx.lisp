@@ -61,9 +61,11 @@
 	   (write desc :stream stream))))
 
 (defun random-list (lst)
+  "Takes a random element from a list using equal weight"
   (nth (random (length lst)) lst))
 
 (defun random-list-weighted (lst)
+  "Takes a list where each element is a cons of a probability (out of 100) and an element and takes a random element from that list"
   (let ((num (random 100))
 		(weights 0)
 		(retval nil))
@@ -75,9 +77,11 @@
 	retval))
 
 (defun random-probability (&optional (percentage 50))
+  "Takes a percentage out of 100 and returns t or nil randomly"
   (< (random 100) percentage))
 
 (defun random-deviation (num &key (zero-p nil))
+  "Gives a random number from -num to +num inclusive, possibly including zero"
   (let ((chosen (- (random (+ 1 (* 2 num))) num)))
 	(if (and (not zero-p)
 			 (= chosen 0))
@@ -85,6 +89,7 @@
 		chosen)))
 
 (defun bound (num boundary &optional (lower-limit nil))
+  "Gives num if num is less than boundary, otherwise gives boundary"
   (if (> num boundary)
 	  boundary
 	  (if (and lower-limit (< num lower-limit))
@@ -124,13 +129,13 @@
 (defclass item (obj)
   ((pickup :initform t)
    (use :initform '(lambda (i p hp) t) :initarg :use :accessor get-use)
-   (one-use :initform t :initarg :one-use :accessor one-use-p)
+   (one-use :initform nil :initarg :one-use :accessor one-use-p)
    (takes-turn :initform nil :initarg :takes-turn :accessor takes-turn-p)
    (atk-bonus :initform 0 :initarg :atk-bonus :accessor get-atk-bonus)
    (def-bonus :initform 0 :initarg :def-bonus :accessor get-def-bonus)
    (max-hp-bonus :initform 0 :initarg :max-hp-bonus :accessor get-max-hp-bonus)))
 
-(init-print item '(x y char name color blocks blocks-sight pickup))
+(init-print item '(x y char name color blocks blocks-sight pickup use one-use takes-turn atk-bonus def-bonus max-hp-bonus))
 
 (defclass monster (obj)
   ((hp :initarg :hp :accessor get-hp)
@@ -195,14 +200,22 @@
   (setf (get-ai mon) '(lambda (mon) t))
   (setf (blocks-p mon) nil)
   (format-message ("~A dies a horrible and painful death" (get-name mon)) :color :cred)
-  (setf (get-exp *player*) (+ (get-exp *player*) 10))
+  (setf (get-exp *player*) (+ (get-exp *player*) (cond ((> (get-dlvl *player*) 6)
+														50)
+													   ((> (get-dlvl *player*) 3)
+														30)
+													   (t
+														10))))
   (when (> (get-exp *player*) (threshold *player*))
 	(level-up *player*)))
 
 (defmethod player-death ((mon monster))
   (setf (get-char mon) #\%)
   (setf *game-state* nil)
-  (message "You die a lonely and depressing death" :color :cred))
+  (message "You die a lonely and depressing death" :color :cred)
+  (render-messages)
+  (delete-file "phalanx-save.sav")
+  (getch))
 
 (defmethod leader-death ((mon monster))
   ;; NOTE: this removes all goals associated with the leader, even if they're associated with another leader
@@ -215,6 +228,15 @@
   (setf (get-exp *player*) (+ (get-exp *player*) 100))
   (when (> (get-exp *player*) (threshold *player*))
 	(level-up *player*)))
+
+(defmethod witch-death ((mon monster))
+  (setf *goals* (remove-if (lambda (x) (member x (get-goals mon)))
+						   *goals*))
+  (setf (get-char mon) #\%)
+  (setf (get-ai mon) '(lambda (mon) t))
+  (setf (blocks-p mon) nil)
+  (story 'win)
+  (setf *game-state* nil))
 
 (defmethod can-see-p ((mon-looking monster) (mon-looked-at monster))
   (member (cons (get-x mon-looked-at) (get-y mon-looked-at))
@@ -263,14 +285,13 @@
   (if (<= (get-hp mon) 0)
 	  (kill-monster mon)))
 
-(defmethod attack ((attacker monster) (defender monster))
+(defmethod attack ((attacker monster) (defender monster) &optional (hit-message "~A attacks ~A for ~A damage!") (miss-message "~A lunges at ~A and misses!"))
   "Have the attacker monster perform an attack on the defender monster"
-  ;; FIXME: overly simplistic, although it works for a test
   (let ((hit-p (< (random 1.0) (/ (atk attacker) (+ (atk attacker) (def defender)))))
 		(damage (+ (random 3) (round (/ (atk attacker) (def defender))))))
-	(cond (hit-p (format-message ("~A attacks ~A for ~A damage!" (get-name attacker) (get-name defender) damage) :color :cred)
+	(cond (hit-p (format-message (hit-message (get-name attacker) (get-name defender) damage) :color :cred)
 				 (deal-damage defender damage))
-		  (t (format-message ("~A lunges at ~A and misses!" (get-name attacker) (get-name defender)) :color :cred)))))
+		  (t (format-message (miss-message (get-name attacker) (get-name defender)) :color :cred)))))
 
 (defmethod move-mon ((mon monster) dx dy)
   (let ((new-x (+ (get-x mon) dx))
@@ -298,6 +319,54 @@
   (setf *goals* (remove-if (lambda (x) (member x (get-goals l)))
 						   *goals*))
   (basic-ai l) ; Basic AI is used to give easy run-away functionality
+  (setf (get-goals l) nil) ; Reset goals for better or worse
+  (add-goal l (cons (get-x l) (get-y l))))
+
+(defmethod witch-ai ((l leader))
+  (setf *goals* (remove-if (lambda (x) (member x (get-goals l)))
+						   *goals*))
+
+  (cond ((or (random-probability 20)
+			 (= (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
+											   :x2 (get-x (get-p1 *player*)) :y2 (get-y (get-p1 *player*))))) 2)
+			 (= (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
+											   :x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))) 2))
+		 ;; Run away
+		 (let ((map (dijkstra-map (cons (get-x (get-p1 *player*)) (get-y (get-p1 *player*)))
+								  (cons (get-x (get-p2 *player*)) (get-y (get-p2 *player*))))))
+		   (dotimes (x (- *screen-width* 1))
+			 (dotimes (y (- *screen-height* 1))
+			   (when (aref map x y)
+				 (setf (aref map x y) (* (aref map x y) -1.2)))))
+		   (let ((path (dijkstra-path map (cons (get-x l) (get-y l)))))
+			 (move-mon l (- (car path) (get-x l)) (- (cdr path) (get-y l))))))
+		((or (and (can-see-p l (get-p1 *player*))
+				  (< (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
+													:x2 (get-x (get-p1 *player*)) :y2 (get-y (get-p1 *player*)))))
+					 6))
+			 (and (can-see-p l (get-p2 *player*))
+				  (< (length (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
+													:x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*)))))
+					 6)))
+		 ;; Attack
+		 (defun spawn-specter ()
+		   (let ((spawn-points (remove-if-not (lambda (pt) (not (blocked-p (car pt) (cdr pt))))											  
+											  (cdr (butlast (points (make-instance 'line :x1 (get-x l) :y1 (get-y l)
+																				   :x2 (get-x (get-p2 *player*)) :y2 (get-y (get-p2 *player*))))
+															1)))))
+			 (if (not (null spawn-points))
+				 (push (make-instance 'monster :x (caar spawn-points) :y (cdar spawn-points)
+									  :hp (+ 100 (random-deviation 5 :zero-p t))
+									  :atk (+ 30 (random-deviation 2 :zero-p t))
+									  :def (+ 30 (random-deviation 2 :zero-p t))
+									  :name "Specter" :char #\s :color :cyellow :blocks t)
+					   *objects*)
+				 (message "The Witch gestures wildly"))))
+		 
+		 (eval (random-list-weighted (list (cons 40 `(message "The Witch gestures wildly"))
+										   (cons 30 `(spawn-specter))
+										   (cons 30 `(progn (attack ,l ,*player* "~A zaps ~A with lightning for ~A damage" "~A zaps lightning which shoots past ~A"))))))))
+  
   (setf (get-goals l) nil) ; Reset goals for better or worse
   (add-goal l (cons (get-x l) (get-y l))))
 
@@ -334,6 +403,7 @@
 			(deal-damage mon damage)
 			(format-message (hit-message (get-name mon)) :color hit-message-color))
 		  (remove-if-not (lambda (obj) (and (typep obj 'monster)
+											(not (char= (get-char obj) #\%))
 											(= (get-x obj) (+ (get-x p) (car direction)))
 											(= (get-y obj) (+ (get-y p) (cdr direction)))))
 						 *objects*)))
@@ -348,7 +418,8 @@
 	  (when (blocks-p (aref *map* (car pt) (cdr pt)))
 		(message "Hit a wall" :color hit-message-color)
 		(return))
-	  (dolist (mon (remove-if-not (lambda (obj) (typep obj 'monster)) *objects*))
+	  (dolist (mon (remove-if-not (lambda (obj) (and (typep obj 'monster)
+													 (not (char= (get-char obj) #\%)))) *objects*))
 		(when (and (= (get-x mon) (car pt))
 				   (= (get-y mon) (cdr pt)))
 		  (deal-damage mon damage)
@@ -375,14 +446,16 @@
 		(attack *player* defender))))
   t)
 
-;; NOTE: This gets quite complicated because of the restrictions of an object system
 (defclass player (monster)
   ((p1 :initform (make-instance 'half-player) :initarg :p1 :accessor get-p1)
    (p2 :initform (make-instance 'half-player) :initarg :p2 :accessor get-p2)
-   (name :initform (gen-roman-name) :accessor get-name)
+   (full-name :initform (gen-roman-name) :accessor get-full-name)
    (dlvl :initform 1 :accessor get-dlvl)
    (lvl :initform 1 :accessor get-lvl)
    (exp :initform 0 :accessor get-exp)))
+
+(defmethod initialize-instance :after ((p player) &key)
+  (setf (get-name p) (subseq (get-full-name p) 0 (position #\Space (get-full-name p)))))
 
 (init-print player '(p1 p2 name lvl dlvl exp x y hp max-hp attack defense ai death))
 
@@ -390,7 +463,15 @@
   (funcall (coerce (get-use i) 'function) i p hp))
 
 (defmethod threshold ((p player))
-  (expt 10 (get-lvl p)))
+  (defun to-next-level (l)
+	(if (<= l 1)
+		50
+		(* (+ 1 (expt 0.85 l)) (to-next-level (- l 1)))))
+  (defun total-exp (l)
+	(if (<= l 1)
+		(to-next-level l)
+		(+ (to-next-level l) (total-exp (- l 1)))))
+  (total-exp (get-lvl p)))
 
 (defmethod level-up ((p player))
   (setf (get-lvl p) (+ (get-lvl p) 1))
@@ -423,14 +504,16 @@
 	(when (and (string= (get-name first-stair) "upstair")
 			   (= (get-x first-stair) (get-x (get-p1 *player*)))
 			   (= (get-y first-stair) (get-y (get-p1 *player*))))
-	  (dolist (second-stair (delete first-stair *objects*))
+	  (dolist (second-stair (remove first-stair *objects*))
 		(when (and (string= (get-name second-stair) "upstair")
 				   (= (get-x second-stair) (get-x (get-p2 *player*)))
 				   (= (get-y second-stair) (get-y (get-p2 *player*))))
-		  (setf *objects* nil)
-		  (setf (get-dlvl p) (- (get-dlvl p) 1))
+		  (when (or (not (= (get-dlvl p) 1))
+					(warn-of-impending-doom))
+			(setf *objects* nil)
+			(setf (get-dlvl p) (- (get-dlvl p) 1))
+			(init-map :stair 'down))
 		  (erase)
-		  (init-map :stair 'down)
 		  (render-all))))))
 
 (defmethod pickup ((p player))
@@ -831,13 +914,24 @@
 
 (defun init-map (&key (stair 'up))
   "Initializes the *map* global variable"
+
+  (when (= (get-dlvl *player*) 0)
+	(when (not (null *game-state*))
+	  (delete-file "phalanx-save.sav"))
+	(setf *game-state* nil))
+  
   (dostep (x 0 (- *screen-width* 1))
 	   (dostep (y 0 (- *screen-height* 1))
 			   (setf (aref *map* x y) (make-instance 'tile :blocks t))))
 
-  (when (= (get-dlvl *player*) 0)
-	(setf *game-state* nil))
-
+  (defun gen-pillars (&optional (num-pillars (+ 30 (random 40))))
+	"Adds a bunch of random pillars for variety"
+	(dotimes (i (+ 30 (random 40)))
+	  (setf (aref *map*
+				  (+ 2 (random (- *screen-width* 5)))
+				  (+ 2 (random (- *screen-height* 5))))
+			(make-instance 'tile :blocks t))))
+  
   (defun big-open-level ()
 	"Uses 3 different dungeon generation methods in unison in an attempt to create a big open level with roughly rectangular rooms and a directional component"
 	(let* ((shapes (split-dungeon 0 1 1 (- *screen-width* 2) (- *screen-height* 2)))
@@ -855,13 +949,10 @@
 	(direct-dungeon :windyness (random 100) :roughness (random 50) :complexity 1 :stair stair)
 
 	;;Generate pillars
-	(dotimes (i (+ 30 (random 40)))
-	  (setf (aref *map*
-				  (+ 2 (random (- *screen-width* 5)))
-				  (+ 2 (random (- *screen-height* 5))))
-			(make-instance 'tile :blocks t))))
+	(gen-pillars))
 
   (defun two-corridor-level ()
+	"Generate a level with two side-by-side corridors"
 	(let ((displacement (random 4)))
 	  (direct-dungeon :windyness (random 10) :roughness (random 10) :stair nil :ystart (+ 1 displacement) :hstart 3)
 	  (direct-dungeon :windyness (random 10) :roughness (random 10) :stair nil :ystart (- *screen-height* 6 displacement) :hstart 3)
@@ -892,214 +983,366 @@
 	  	(push (make-instance 'obj :x (- *screen-width* 2) :y y2
 	  						 :name "downstair" :char #\>)
 	  		  *objects*))))
-  
-  ;; Generate map
-  (eval (random-list-weighted (list (cons 80 '(big-open-level))
-									(cons 20 '(two-corridor-level)))))
 
-  ;; WARNING: Numbers not playtested, balance unlikely
-  
-  ;; Generate monsters
-  (dotimes (n (+ (get-dlvl *player*) 3 (random 5)))
-  	(let ((x (random *screen-width*))
-  		  (y (random *screen-height*)))
-  	  (while (or (blocked-p x y)
-  				 (and (= x (get-x (get-p1 *player*)))
-  					  (= y (get-y (get-p1 *player*))))
-  				 (and (= x (get-x (get-p2 *player*)))
-  					  (= y (get-y (get-p2 *player*)))))
-  		(setf x (random *screen-width*))
-  		(setf y (random *screen-height*)))
-	  (let ((monster-list (cond ((< (get-dlvl *player*) 4) ; Monster set dlvl 1+
-								 (list (cons 20 `(make-instance 'monster :x ,x :y ,y
-																:hp (+ 20 (random-deviation 3 :zero-p t))
-																:atk (+ 6 (random-deviation 1 :zero-p t))
-																:def (+ 3 (random-deviation 1 :zero-p t))
-																:name "goth" :char #\g :color :cpurple :blocks t))
-									   (cons 50 `(make-instance 'monster :x ,x :y ,y
-																:hp (+ 10 (random-deviation 1 :zero-p t))
-																:atk 2
-																:def 2
-																:name "slave" :char #\s :blocks t))
-									   (cons 30 `(make-instance 'monster :x ,x :y ,y
-																:hp (+ 15 (random-deviation 4 :zero-p t))
-																:atk (+ 3 (random-deviation 2 :zero-p t))
-																:def (+ 6 (random-deviation 2 :zero-p t))
-																:name "greek" :char #\g :color :cgreen :blocks t))))
-								((< (get-dlvl *player*) 7) ; Monster set dlvl 4+
-								 (error "Haven't yet created all monsters for dlvl 4+")
-								 
-								 (list (cons 10 `(make-instance 'monster :x ,x :y ,y
-																:hp (+ 50 (random-deviation 10 :zero-p t))
-																:name "Gladiator")) ; Slave+
-									   (cons 10 `(make-instance 'monster :x ,x :y ,y
-																:name "Visigoth")) ; Goth+
-									   (cons 10 `(make-instance 'monster :x ,x :y ,y
-																:name "Persian")) ; Greek+
-									   (cons 10 `(make-instance 'monster :x ,x :y ,y
-																:name "Vandal"))))
-								(t
-								 (error "Haven't yet created all monsters for dlvl 7+")
-								 (list (cons 10 `(make-instance 'monster :x ,x :y ,y
-																:hp (+ 50 (random-deviation 10 :zero-p t))
-																:name "Gladiator"))
-									   (cons 10 `(make-instance 'monster :x ,x :y ,y
-																:name "Carthaginian")) ; Greek++
-									   (cons 10 `(make-instance 'monster :x ,x :y ,y
-																:name "Hun")))))))
-		(push (eval (random-list-weighted monster-list))
-			  *objects*))))
-  
-  ;; Generate items
-  (dotimes (n (+ 3 (get-dlvl *player*) (random 5)))
-	(let ((x (random *screen-width*))
+  (defun one-cavern-level ()
+	"Generate a level with one big cavern and no downstairs"
+	(dostep (x 1 (- *screen-width* 2))
+				 (dostep (y 1 (- *screen-height* 2))
+						 (let ((type (random-probability 35)))
+						   (setf (aref *map* x y) (make-instance 'tile :blocks type :blocks-sight type)))))
+	(smooth-dungeon 7)
+
+	(gen-pillars)
+
+	(let ((x (random (- *screen-width* 2)))
 		  (y (random *screen-height*)))
-	  (while (blocks-p (aref *map* x y))
-		(setf x (random *screen-width*))
-		(setf y (random *screen-height*)))
-	  (let ((item-list (cond ((< (get-dlvl *player*) 4) ; Item set dlvl 1+
-							  (list (cons 30 `(make-instance 'item :x ,x :y ,y
-															 :name "Healing Draught"
-															 :char #\!
-															 :color :cpurple
-															 :use '(lambda (i p hp)
-																	(setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
-															 :one-use t))
-									(cons 15 `(make-instance 'item :x ,x :y ,y
-															 :name "Caligae (boots)"
-															 :char #\[
-															 :color :cbrown
-															 :def-bonus 3))
-									(cons 25 `(make-instance 'item :x ,x :y ,y
-															 :name "Pugio (dagger)"
-															 :char #\)
-															 :atk-bonus 1
-															 :one-use (random-probability 70)
-															 :use '(lambda (i p hp)
-																	(power-strike hp (take-in-direction) (+ 5 (random (bound (atk p) 16))) :hit-message "The pugio stabs ~A viciously")
-																	(when (random-probability)
-																	  (setf (one-use-p i) t)))
-															 :takes-turn t
-															 :color :cgray))
-									(cons 30 `(make-instance 'item :x ,x :y ,y
-															 :name "Verutum (javelin)"
-															 :atk-bonus 1
-															 :char #\)
-															 :color :cyellow
-															 :use '(lambda (i p hp)
-																	(throw-item hp (take-in-direction) 3 (+ 1 (random (bound (atk p) 10))) :hit-message "The verutum pokes ~A" :to-drop i))
-															 :one-use t
-															 :takes-turn t))))
-							 ((< (get-dlvl *player*) 7) ; Item set dlvl 4+
-							  (list (cons 25 `(make-instance 'item :x ,x :y ,y
-															 :name "Healing Draught"
-															 :char #\!
-															 :color :cpurple
-															 :use '(lambda (i p hp)
-																	(setf (get-hp p) (bound (+ (get-hp p) 5 (random 6)) (max-hp p))))
-															 :one-use t))
-									(cons 15 `(make-instance 'item :x ,x :y ,y
-															 :name "Clipeus (shield)"
-															 :char #\[
-															 :color :ccyan
-															 :def-bonus 9))
-									(cons 10 `(make-instance 'item :x ,x :y ,y
-															 :name "Hasta (spear)"
-															 :char #\)
-															 :color :cbrown
-															 :takes-turn t
-															 ;; Use for a multi-use short-distance attack that won't break the hasta
-															 :atk-bonus 4))
-									(cons 25 `(make-instance 'item :x ,x :y ,y
-															 :name "Pilum (javelin)"
-															 :atk-bonus 5
-															 :char #\)
-															 :color :cbrown
-															 :use '(lambda (i p hp)
-																	(throw-item hp (take-in-direction) 5 (+ 5 (random (bound (atk p) 20))) :hit-message "The pilum severely pierces ~A"))
-															 :one-use t
-															 :takes-turn t))
-									(cons 15 `(make-instance 'item :x ,x :y ,y
-															 :name "Verutum (javelin)"
-															 :atk-bonus 1
-															 :char #\)
-															 :color :cyellow
-															 :use '(lambda (i p hp)
-																	(throw-item hp (take-in-direction) 3 (+ 1 (random (bound (atk p) 10))) :hit-message "The verutum pokes ~A" :to-drop i))
-															 :one-use t
-															 :takes-turn t))
-									(cons 10 `(make-instance 'item :x ,x :y ,y
-															 :name "Gladius (sword)"
-															 :char #\)
-															 :atk-bonus 10
-															 ;; Use for a powerful strike with a chance to break the Gladius
-															 :one-use (random-probability 30)
-															 :takes-turn t
-															 :color :cwhite))))
-							 (t
-							  (error "Haven't yet created all items for dlvl 7+")
-							  (list (cons 10 `(make-instance 'item :x ,x :y ,y
-															 :name "Arcus (bow)"
-															 :char #\)
-															 :color :cbrown
-															 :takes-turn t
-															 :use '(lambda (i p hp)
-																	(throw-item hp (take-in-direction) 7 (+ 3 (random (bound (atk p) 30)) :hit-message "The arrow firmly strikes ~A")))))
-									(cons 10 `(make-instance 'item :x ,x :y ,y
-															 :name "Scutum (shield)"
-															 :char #\[
-															 :color :cred
-															 :takes-turn t
-															 :def-bonus 20
-															 ;; Use for a defensive strike that deals damage based on defense and can break the scutum															 
-															 :one-use (random-probability 20))))))))
-		(push (eval (random-list-weighted item-list)) *objects*)))) ; The reason for this trick is so that only the selection is evaluated
-  
-  ;; Generate leader
-  (when (and (< (get-dlvl *player*) 10) (random-probability 25)) ; Each level has a 25% chance of containing a leader
-  	(let ((x (random *screen-width*))
-  		  (y (random *screen-height*)))
-  	  (while (or (blocked-p x y)
-  				 (and (= x (get-x (get-p1 *player*)))
-  					  (= y (get-y (get-p1 *player*))))
-  				 (and (= x (get-x (get-p2 *player*)))
-  					  (= y (get-y (get-p2 *player*)))))
-  		(setf x (random *screen-width*))
-  		(setf y (random *screen-height*)))
-  	  (push (case (get-dlvl *player*)
-			  (1 (make-instance 'leader :x x :y y
-								:hp (+ 15 (random 5))
-								:atk (+ 3 (random 3))
-								:def (+ 1 (random 3))
-								:name "Archimedes" :char #\G :color :cgreen :blocks t)) ; Greek inventor
-			  (2 (make-instance 'leader :x x :y y
-								:hp (+ 25 (random 5))
-								:atk (+ 8 (random 3))
-								:def (+ 4 (random 3))
-								:name "Cniva" :char #\G :color :cpurple :blocks t)) ; King of the Goths
-			  (3 (make-instance 'leader :x x :y y
-								:hp (+ 30 (random 5))
-								:atk (+ 30 (random 5))
-								:def (+ 1 (random 2)) ; Pyrrhus has insane attack, and insanely low defense, making a Pyrrhic victory all too likely
-								:name "Pyrrhus")) ; of Epirus; "Pyrrhic victory"
-			  (4 (make-instance 'leader :x x :y y
-								:name "Alaric")) ; King of the Visigoths
-			  (5 (make-instance 'leader :x x :y y
-								:name "Genseric")) ; King of the Vandals
-			  (6 (make-instance 'leader :x x :y y
-								:name "Shapur")) ; King of the Sassanid Persians
-			  (7 (make-instance 'leader :x x :y y
-								:name "Spartacus")) ; Gladiator
-			  (8 (make-instance 'leader :x x :y y
-								:name "Attila")) ; the Hun
-			  (9 (make-instance 'leader :x x :y y
-								:name "Hannibal"))) ; of Carthage
-			*objects*)))
+	  (while (or (blocked-p x y)
+				 (blocked-p (+ x 2) y))
+			 (setf x (random *screen-width*))
+			 (setf y (random *screen-height*)))
+	  (push (make-instance 'obj :x x :y y :name "upstair" :char #\<) *objects*)
+	  (push (make-instance 'obj :x (+ x 2) :y y :name "upstair" :char #\<) *objects*)
+	  (setf (get-x (get-p1 *player*)) x)
+	  (setf (get-y (get-p1 *player*)) y)
+	  (setf (get-x (get-p2 *player*)) (+ x 2))
+	  (setf (get-y (get-p2 *player*)) y)))
 
-  ;; TODO: Give "vanguards" to the leaders which are advanced versions of regular units
+  (cond ((= (get-dlvl *player*) 10)
+
+		 ;; Init map
+		 (one-cavern-level)
+		 
+		 ;; Place Witch
+		 (let ((x (random *screen-width*))
+			   (y (random *screen-height*)))
+		   (while (or (blocked-p x y)
+					  (and (= x (get-x (get-p1 *player*)))
+						   (= y (get-y (get-p1 *player*))))
+					  (and (= x (get-x (get-p2 *player*)))
+						   (= y (get-y (get-p2 *player*)))))
+			 (setf x (random *screen-width*))
+			 (setf y (random *screen-height*)))
+		   (push (make-instance 'leader :x x :y y
+								:hp (+ 200 (random 10))
+								:atk (+ 30 (random 5))
+								:def (+ 100 (random 10))
+								:ai 'witch-ai
+								:death 'witch-death
+								:name "Witch" :char #\W :color :cpurple :blocks t)
+				 *objects*)
+
+		   ;; Place Witch vanguard
+		   (dolist (mon-pt (butlast (remove-if-not (lambda (pt) (not (blocked-p (car pt) (cdr pt))))
+												   (points-within 1 (cons x y)))
+									5))
+			 (push (make-instance 'monster :x (car mon-pt) :y (cdr mon-pt)
+								  :hp (+ 100 (random-deviation 5 :zero-p t))
+								  :atk (+ 30 (random-deviation 2 :zero-p t))
+								  :def (+ 30 (random-deviation 2 :zero-p t))
+								  :name "Specter" :char #\s :color :cyellow :blocks t)
+				   *objects*)))
+
+		 ;; Place monsters
+		 (dotimes (n (+ 4 (random 4)))
+		   (let ((x (random *screen-width*))
+				 (y (random *screen-height*)))
+			 (while (or (blocked-p x y)
+						(and (= x (get-x (get-p1 *player*)))
+							 (= y (get-y (get-p1 *player*))))
+						(and (= x (get-x (get-p2 *player*)))
+							 (= y (get-y (get-p2 *player*)))))
+			   (setf x (random *screen-width*))
+			   (setf y (random *screen-height*)))
+			 (push (make-instance 'monster :x x :y y
+								  :hp (+ 100 (random-deviation 5 :zero-p t))
+								  :atk (+ 30 (random-deviation 2 :zero-p t))
+								  :def (+ 30 (random-deviation 2 :zero-p t))
+								  :name "Specter" :char #\s :color :cyellow :blocks t)
+				   *objects*))))
+		(t
+		 ;; Generate map
+		 (eval (random-list-weighted (list (cons 80 '(big-open-level))
+										   (cons 20 '(two-corridor-level)))))
+
+		 ;; WARNING: Numbers not playtested enough, balance unlikely
   
-  ;; NOTE: dlvl 10 is a special boss level and the end of the game, so that needs to be separated from regular level generation
-  )
+		 ;; Generate monsters
+		 (dotimes (n (+ (bound (get-dlvl *player*) 4) 2 (random 3)))
+		   (let ((x (random *screen-width*))
+				 (y (random *screen-height*)))
+			 (while (or (blocked-p x y)
+						(and (= x (get-x (get-p1 *player*)))
+							 (= y (get-y (get-p1 *player*))))
+						(and (= x (get-x (get-p2 *player*)))
+							 (= y (get-y (get-p2 *player*)))))
+			   (setf x (random *screen-width*))
+			   (setf y (random *screen-height*)))
+			 (let ((monster-list (cond ((< (get-dlvl *player*) 4) ; Monster set dlvl 1+
+										(list (cons 20 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 20 (random-deviation 3 :zero-p t))
+																	   :atk (+ 6 (random-deviation 1 :zero-p t))
+																	   :def (+ 3 (random-deviation 1 :zero-p t))
+																	   :name "Goth" :char #\g :color :cpurple :blocks t))
+											  (cons 50 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 10 (random-deviation 1 :zero-p t))
+																	   :atk 2
+																	   :def 2
+																	   :name "Slave" :char #\s :blocks t))
+											  (cons 30 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 15 (random-deviation 4 :zero-p t))
+																	   :atk (+ 3 (random-deviation 2 :zero-p t))
+																	   :def (+ 6 (random-deviation 2 :zero-p t))
+																	   :name "Greek" :char #\g :color :cgreen :blocks t))))
+									   ((< (get-dlvl *player*) 7) ; Monster set dlvl 4+
+										(list (cons 10 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 50 (random-deviation 10 :zero-p t))
+																	   :atk (+ 16 (random-deviation 1))
+																	   :def (+ 16 (random-deviation 1))
+																	   :name "Gladiator" :char #\g :blocks t)) ; Slave+
+											  (cons 20 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 40 (random-deviation 5 :zero-p t))
+																	   :atk (+ 14 (random-deviation 3))
+																	   :def (+ 10 (random-deviation 3))
+																	   :name "Visigoth" :char #\v :color :cpurple :blocks t)) ; Goth+
+											  (cons 30 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 35 (random-deviation 7 :zero-p t))
+																	   :atk (+ 10 (random-deviation 3))
+																	   :def (+ 14 (random-deviation 3))
+																	   :name "Persian" :char #\p :color :cgreen :blocks t)) ; Greek+
+											  (cons 40 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 30 (random-deviation 3 :zero-p t))
+																	   :atk (+ 18 (random-deviation 3))
+																	   :def (+ 10 (random-deviation 2))
+																	   :name "Vandal" :char #\v :color :cblue :blocks t))))
+									   (t ; Monster set dlvl 7+
+										(list (cons 15 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 50 (random-deviation 10 :zero-p t))
+																	   :atk (+ 16 (random-deviation 1))
+																	   :def (+ 16 (random-deviation 1))																
+																	   :name "Gladiator" :char #\g :blocks t))
+											  (cons 30 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 75 (random-deviation 10 :zero-p t))
+																	   :atk (+ 20 (random-deviation 7 :zero-p t))
+																	   :def (+ 40 (random-deviation 7 :zero-p t))
+																	   :name "Carthaginian" :char #\c :color :cgreen :blocks t)) ; Greek++
+											  (cons 30 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 80 (random-deviation 6 :zero-p t))
+																	   :atk (+ 40 (random-deviation 4 :zero-p t))
+																	   :def (+ 20 (random-deviation 4 :zero-p t))
+																	   :name "Hun" :char #\h :color :cred :blocks t))
+											  (cons 25 `(make-instance 'monster :x ,x :y ,y
+																	   :hp (+ 100 (random-deviation 5 :zero-p t))
+																	   :atk (+ 30 (random-deviation 2 :zero-p t))
+																	   :def (+ 30 (random-deviation 2 :zero-p t))
+																	   :name "Specter" :char #\s :color :cyellow :blocks t)))))))
+			   (push (eval (random-list-weighted monster-list))
+					 *objects*))))
+  
+		 ;; Generate items
+		 (dotimes (n (+ 3 (get-dlvl *player*) (random 5)))
+		   (let ((x (random *screen-width*))
+				 (y (random *screen-height*)))
+			 (while (blocks-p (aref *map* x y))
+			   (setf x (random *screen-width*))
+			   (setf y (random *screen-height*)))
+			 (let ((item-list (cond ((< (get-dlvl *player*) 4) ; Item set dlvl 1+
+									 (list (cons 30 `(make-instance 'item :x ,x :y ,y
+																	:name "Healing Draught"
+																	:char #\!
+																	:color :cpurple
+																	:use '(lambda (i p hp)
+																		   (let ((healed (- (bound (+ (get-hp p) 5 (random 6)) (max-hp p)) (get-hp p))))
+																			 (setf (get-hp p) (+ (get-hp p) healed))
+																			 (format-message ("You get healed ~A points" healed) :color :cpurple)))
+																	:one-use t))
+										   (cons 15 `(make-instance 'item :x ,x :y ,y
+																	:name "Caligae (boots)"
+																	:char #\[
+																	:color :cbrown
+																	:def-bonus 3))
+										   (cons 25 `(make-instance 'item :x ,x :y ,y
+																	:name "Pugio (dagger)"
+																	:char #\)
+																	:atk-bonus 1
+																	:one-use (random-probability 70)
+																	:use '(lambda (i p hp)
+																		   (power-strike hp (take-in-direction) (+ 5 (random (bound (atk p) 16))) :hit-message "The pugio stabs ~A viciously")
+																		   (when (random-probability)
+																			 (setf (one-use-p i) t)))
+																	:takes-turn t
+																	:color :cgray))
+										   (cons 30 `(make-instance 'item :x ,x :y ,y
+																	:name "Verutum (javelin)"
+																	:atk-bonus 1
+																	:char #\)
+																	:color :cyellow
+																	:use '(lambda (i p hp)
+																		   (throw-item hp (take-in-direction) 3 (+ 1 (random (bound (atk p) 10))) :hit-message "The verutum pokes ~A" :to-drop i))
+																	:one-use t
+																	:takes-turn t))))
+									((< (get-dlvl *player*) 7) ; Item set dlvl 4+
+									 (list (cons 25 `(make-instance 'item :x ,x :y ,y
+																	:name "Healing Draught"
+																	:char #\!
+																	:color :cpurple
+																	:use '(lambda (i p hp)
+																		   (let ((healed (- (bound (+ (get-hp p) 5 (random 6)) (max-hp p)) (get-hp p))))
+																			 (setf (get-hp p) (+ (get-hp p) healed))
+																			 (format-message ("You get healed ~A points" healed) :color :cpurple)))
+																	:one-use t))
+										   (cons 15 `(make-instance 'item :x ,x :y ,y
+																	:name "Clipeus (shield)"
+																	:char #\[
+																	:color :ccyan
+																	:def-bonus 9))
+										   (cons 10 `(make-instance 'item :x ,x :y ,y
+																	:name "Hasta (spear)"
+																	:char #\)
+																	:color :cbrown
+																	:takes-turn t
+																	:use '(lambda (i p hp)
+																		   (throw-item hp (take-in-direction) 2 (+ 4 (random (bound (atk p) 15))) :hit-message "The hasta thoroughly jabs ~A"))
+																	:atk-bonus 4))
+										   (cons 25 `(make-instance 'item :x ,x :y ,y
+																	:name "Pilum (javelin)"
+																	:atk-bonus 5
+																	:char #\)
+																	:color :cbrown
+																	:use '(lambda (i p hp)
+																		   (throw-item hp (take-in-direction) 5 (+ 5 (random (bound (atk p) 20))) :hit-message "The pilum severely pierces ~A"))
+																	:one-use t
+																	:takes-turn t))
+										   (cons 15 `(make-instance 'item :x ,x :y ,y
+																	:name "Verutum (javelin)"
+																	:atk-bonus 1
+																	:char #\)
+																	:color :cyellow
+																	:use '(lambda (i p hp)
+																		   (throw-item hp (take-in-direction) 3 (+ 1 (random (bound (atk p) 10))) :hit-message "The verutum pokes ~A" :to-drop i))
+																	:one-use t
+																	:takes-turn t))
+										   (cons 10 `(make-instance 'item :x ,x :y ,y
+																	:name "Gladius (sword)"
+																	:char #\)
+																	:atk-bonus 10
+																	:use '(lambda (i p hp)
+																		   (power-strike hp (take-in-direction) (+ 10 (random (bound (atk p) 30))) :hit-message "The gladius slashes and gashes ~A")
+																		   (when (random-probability 30)
+																			 (setf (one-use-p i) t)))
+																	:one-use (random-probability 30)
+																	:takes-turn t
+																	:color :cwhite))))
+									(t	; Item set dlvl 7+
+									 (list (cons 35 `(make-instance 'item :x ,x :y ,y
+																	:name "Arcus (bow)"
+																	:char #\)
+																	:color :cbrown
+																	:takes-turn t
+																	:use '(lambda (i p hp)
+																		   (throw-item hp (take-in-direction) 7 (+ 3 (random (bound (atk p) 30))) :hit-message "The arrow firmly strikes ~A"))))
+										   (cons 25 `(make-instance 'item :x ,x :y ,y
+																	:name "Vitality Pendant"
+																	:char #\"
+																	:color :cblue
+																	:max-hp-bonus 10
+																	:use '(lambda (i p hp)
+																		   (let ((healed (- (bound (+ (get-hp p) 10 (random 11)) (max-hp p)) (get-hp p))))
+																			 (setf (get-hp p) (+ (get-hp p) healed))
+																			 (format-message ("You get healed ~A points" healed) :color :cpurple)))
+																	:one-use t))
+										   (cons 10 `(make-instance 'item :x ,x :y ,y
+																	:name "Scythe"
+																	:char #\)
+																	:color :cpurple
+																	:takes-turn t
+																	:atk-bonus 15
+																	:use '(lambda (i p hp)
+																		   (throw-item hp (take-in-direction) 2 (+ 8 (random (bound (atk p) 40))) :hit-message "The scythe reaps ~A")
+																		   (when (random-probability 20)
+																			 (setf (one-use-p i) t)))
+																	:one-use (random-probability 40)))
+										   (cons 10 `(make-instance 'item :x ,x :y ,y
+																	:name "Scutum (shield)"
+																	:char #\[
+																	:color :cred
+																	:takes-turn t
+																	:def-bonus 20
+																	:use '(lambda (i p hp)
+																		   (power-strike hp (take-in-direction) (+ 10 (random (bound (def p) 50))) :hit-message "The scutum bashes ~A")
+																		   (when (random-probability 20)
+																			 (setf (one-use-p i) t)))
+																	:one-use (random-probability 20)))
+										   (cons 20 `(make-instance 'item :x ,x :y ,y
+																	:name "Gladius (sword)"
+																	:char #\)
+																	:atk-bonus 10
+																	:use '(lambda (i p hp)
+																		   (power-strike hp (take-in-direction) (+ 10 (random (bound (atk p) 30))) :hit-message "The gladius slashes and gashes ~A")
+																		   (when (random-probability 30)
+																			 (setf (one-use-p i) t)))
+																	:one-use (random-probability 30)
+																	:takes-turn t
+																	:color :cwhite)))))))
+			   (push (eval (random-list-weighted item-list)) *objects*)))) ; The reason for this trick is so that only the selection is evaluated
+		 
+		 ;; Generate leader
+		 (when (random-probability 25) ; Each level has a 25% chance of containing a leader
+		   (let ((x (random *screen-width*))
+				 (y (random *screen-height*)))
+			 (while (or (blocked-p x y)
+						(and (= x (get-x (get-p1 *player*)))
+							 (= y (get-y (get-p1 *player*))))
+						(and (= x (get-x (get-p2 *player*)))
+							 (= y (get-y (get-p2 *player*)))))
+			   (setf x (random *screen-width*))
+			   (setf y (random *screen-height*)))
+			 (push (case (get-dlvl *player*)
+					 (1 (make-instance 'leader :x x :y y
+									   :hp (+ 15 (random 5))
+									   :atk (+ 3 (random 3))
+									   :def (+ 1 (random 3))
+									   :name "Archimedes" :char #\G :color :cgreen :blocks t)) ; Greek inventor
+					 (2 (make-instance 'leader :x x :y y
+									   :hp (+ 25 (random 5))
+									   :atk (+ 8 (random 3))
+									   :def (+ 4 (random 3))
+									   :name "Cniva" :char #\G :color :cpurple :blocks t)) ; King of the Goths
+					 (3 (make-instance 'leader :x x :y y
+									   :hp (+ 30 (random 5))
+									   :atk (+ 30 (random 5))
+									   :def (+ 1 (random 2)) ; Pyrrhus has insane attack, and insanely low defense, making a Pyrrhic victory all too likely
+									   :name "Pyrrhus" :char #\P :color :cred :blocks t)) ; of Epirus; "Pyrrhic victory"
+					 (4 (make-instance 'leader :x x :y y
+									   :hp (+ 45 (random 5))
+									   :atk (+ 18 (random 3))
+									   :def (+ 14 (random 3))
+									   :name "Alaric" :char #\V :color :cpurple :blocks t)) ; King of the Visigoths
+					 (5 (make-instance 'leader :x x :y y
+									   :hp (+ 35 (random 3))
+									   :atk (+ 26 (random 3))
+									   :def (+ 12 (random 2))
+									   :name "Genseric" :char #\V :color :cblue :blocks t)) ; King of the Vandals
+					 (6 (make-instance 'leader :x x :y y
+									   :hp (+ 40 (random 7))
+									   :atk (+ 18 (random 5))
+									   :def (+ 22 (random 5))
+									   :name "Shapur" :char #\P :color :cgreen :blocks t)) ; King of the Sassanid Persians
+					 (7 (make-instance 'leader :x x :y y
+									   :hp (+ 60 (random 10))
+									   :atk (+ 36 (random 5))
+									   :def (+ 24 (random 5))								
+									   :name "Spartacus" :char #\G :blocks t)) ; Gladiator
+					 (8 (make-instance 'leader :x x :y y
+									   :hp (+ 100 (random 6))
+									   :atk (+ 50 (random 4))
+									   :def (+ 30 (random 4))								
+									   :name "Attila" :char #\H :color :cred :blocks t)) ; the Hun
+					 (9 (make-instance 'leader :x x :y y
+									   :hp (+ 110 (random 11))
+									   :atk (+ 40 (random 8))
+									   :def (+ 60 (random 8))
+									   :name "Hannibal" :char #\C :color :cgreen :blocks t))) ; of Carthage
+				   *objects*))))))
 
 (defun get-random-rect (x y width height)
   "Get a random rectangle within the \"dungeon\" rectangle defined by x y width height"
@@ -1272,7 +1515,13 @@
 
 (defun render-objects ()
   "Renders every object in the *objects* list; usually called after the function render-map"
-  (dolist (obj *objects*)
+  (dolist (corpse (remove-if-not (lambda (obj) (char= (get-char obj) #\%))
+								 *objects*))
+	(attron (slot-value corpse 'color))
+	(mvaddch (get-y corpse) (get-x corpse) (slot-value corpse 'char))
+	(Attroff (slot-value corpse 'color)))
+  (dolist (obj (remove-if-not (lambda (potential-corpse) (not (char= (get-char potential-corpse) #\%)))
+							  *objects*))
 	(when (or (lit (aref *map* (get-x obj) (get-y obj)))
 			  (and (or (string= (get-name obj) "downstair") (string= (get-name obj) "upstair"))
 				   (explored-p (aref *map* (get-x obj) (get-y obj)))))
@@ -1452,7 +1701,7 @@
 
 (defun stats ()
   (mvprintw *screen-height* 0 (format nil "DL: ~A CL: ~A" (get-dlvl *player*) (get-lvl *player*)))
-  (bar 12 *screen-height* "HP" (get-hp *player*) (max-hp *player*) :color :cgreen)
+  (bar 14 *screen-height* "H" (get-hp *player*) (max-hp *player*) :color :cgreen)
   (mvprintw *screen-height* 37 (format nil "A: ~A D: ~A" (atk *player*) (def *player*))))
 
 (defun bar (x y label val max &key (color :cwhite))
@@ -1501,8 +1750,8 @@
 		((eq in #\g)
 		 (gather-player))
 		((eq in #\i)
-		 (inventory)
-		 (input))
+		 (when (not (eq (inventory) 'end-turn))
+		   (input)))
 		((eq in #\,)
 		 (pickup *player*))
 		((eq in #\;)
@@ -1513,7 +1762,8 @@
 		 (input))
 		((eq in #\<)
 		 (up *player*)
-		 (input))
+		 (when *game-state*
+		   (input)))
 		((or (eq in #\Escape) (eq in #\m))
 		 (when (not (eq (main-menu) 'quit))
 		   (input)))))
@@ -1581,10 +1831,10 @@
 	(while (not (eq in #\q))
 	  (mvprintw (+ *screen-height* 1) 0 (make-string *screen-width* :initial-element #\Space)) ; Clear line
 	  (mvprintw (+ *screen-height* 1) 0 (format nil "~A" (mapcar (lambda (obj) (concatenate 'string
-																							"["
+																							"|"
 																							(make-string 1
 																										 :initial-element (get-char obj))
-																							"]: "
+																							"|: "
 																							(get-name obj)))
 																 ;; TODO: include player and walls
 																 (remove-if-not (lambda (obj) (and (= (get-x obj) (car cursor))
@@ -1605,7 +1855,8 @@
 
 (defun inventory (&optional (filter #'identity))
   (erase)
-  (let* ((i 0)
+  (let* ((end-turn nil)
+		 (i 0)
 		 (cursor (cons 0 0))
 		 (in nil)
 		 (selectable (cons (remove-if-not filter (get-inv (get-p1 *player*)))
@@ -1689,7 +1940,7 @@
 			 (let ((it (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
 													 (get-p1 *player*)
 													 (get-p2 *player*))))))
-			   (when (not (null i))
+			   (when (not (null it))
 				   (erase)
 				   (render-all)
 				   (refresh)
@@ -1709,7 +1960,8 @@
 									 :count 1)))
 				   (refresh-inventory)
 				   (when (takes-turn-p it)
-					 (return)))))
+					 (setf end-turn t)
+					 (return 'end-turn)))))
 			((eq in #\d)
 			 (when (not (null (nth (car cursor) (get-inv (if (= (cdr cursor) 0)
 															 (get-p1 *player*)
@@ -1753,7 +2005,16 @@
 	  (setf in (curses-code-char (wgetch *stdscr*))))
 	(erase)
 	(render-all)
-	))
+	(when end-turn
+	  'end-turn)))
+
+(defun warn-of-impending-doom ()
+  (erase)
+  (mvprintw 0 0 "WARNING: This will delete your save. Continue (Y/N)?")
+  (let ((in (take-in-char)))
+	(while (not (or (eq in #\y) (eq in #\Y) (eq in #\n) (eq in #\N)))
+	  (setf in (take-in-char)))
+	(or (eq in #\y) (eq in #\Y))))
 
 (defun help (&optional (type 'basic))
   (erase)
@@ -1780,23 +2041,64 @@
   (while (not (eq (take-in-char) #\q))
 	nil))
 
+(defun story (&optional (type 'basic))
+  (erase)
+  (case type
+	(basic (mvprintw 0 0 (format nil "You are ~A," (get-full-name *player*)))
+		   (mvprintw 1 30 "a Roman legionary")
+		   (mvprintw 3 0 "You were looking forward to some well-earned")
+		   (mvprintw 4 0 "downtime during an absentminded raid on some")
+		   (mvprintw 5 0 "noname barbarian village outside of Thracia when")
+		   (mvprintw 6 0 "it happened. After you drove your pilum into this")
+		   (mvprintw 7 0 "guy's skull some witch came out screaming curses")
+		   (mvprintw 8 0 "at you. Next thing you know you're in two bodies.")
+		   (mvprintw 9 0 "Naturally you were beside yourself, but you")
+		   (mvprintw 10 0 "pulled yourself together long enough to chase the")
+		   (mvprintw 11 0 "fleeing witch to a spectral palace. You suspect")
+		   (mvprintw 12 0 "that killing her will lift the curse.")
+		   (mvprintw 14 30 "Time to get to work."))
+	(continue (mvprintw 0 0 (format nil "Welcome back ~A" (get-full-name *player*)))
+			  (mvprintw 1 0 "Is she dead yet?")
+			  (mvprintw 2 0 (if (or (< (get-dlvl *player*) 10)
+									(< (length (remove-if-not (lambda (obj)
+																(and (string= (get-name obj) "Witch")
+																	 (char= (get-char obj) #\%)))
+															  *objects*))
+									   1))
+								"No? Well get on with it then"
+								"Yes? Then what are you still doing here?")))
+	(win (mvprintw 0 0 "You have vanquished the mighty witch.")
+		 (mvprintw 1 0 "The palace dissolves as if it had never existed,")
+		 (mvprintw 2 0 "and you find yourself in a ghastly graveyard.")
+		 (mvprintw 4 0 "Whole once more,")
+		 (mvprintw 5 0 "you take your first steps...")
+		 (mvprintw 6 25 "... toward vacation.")))
+  (getch))
+
 (defun main-menu ()
   (erase)
   (let ((cursor-pos 0) (max-cursor 6) (options nil))
-	(attron :cred)
-	(mvprintw 4 5 "PHALANX")
-	(attroff :cred)
 
-	(attron :cyellow)
-	(mvprintw 7 5 "By Keith Bateman")
-	(attroff :cyellow)
-	(mvprintw 10 5 "n) New Game")
-	(mvprintw 11 5 "s) Save Game")
-	(mvprintw 12 5 "c) Continue Saved Game")
-	(mvprintw 13 5 "r) Resume Game")
-	(mvprintw 14 5 "q) Quit")
-	(mvprintw 15 5 "?) Help")
-	  
+	(defun refresh-menu ()
+	  (erase)
+	  (attron :cred)
+	  (mvprintw 4 5 "PHALANX")
+	  (attroff :cred)
+				   
+	  (attron :cyellow)
+	  (mvprintw 7 5 "By Keith Bateman")
+	  (mvprintw 8 5 "Copyright (C) 2018")
+	  (attroff :cyellow)
+	  (mvprintw 10 5 "n) New Game")
+	  (mvprintw 11 5 "s) Save Game")
+	  (mvprintw 12 5 "c) Continue Saved Game")
+	  (mvprintw 13 5 "r) Resume Game")
+	  (mvprintw 14 5 "q) Quit")
+	  (mvprintw 15 5 "?) Help")
+	  t)
+
+	(refresh-menu)
+	
 	(setf options (acons 0 #\n options))
 	(setf options (acons 1 #\s options))
 	(setf options (acons 2 #\c options))
@@ -1819,10 +2121,11 @@
 									:atk (+ 5 (random 4))
 									:def (+ 5 (random 4))
 									:ai '(lambda (mon) (input))
-									:death 'player-death))
+									:death 'player-death))	  
 	  (setf *messages* nil)
 	  (setf *map* (make-array (list *screen-width* *screen-height*)))
 	  (setf *game-state* t)
+	  (story)
 	  (init-map)
 	  (fov-calculate)
 	  (resume-game))
@@ -1837,30 +2140,33 @@
 		(write (cons '*map* *map*) :stream save-file)
 		(write (cons '*objects* *objects*) :stream save-file)
 		(write (cons '*game-state* *game-state*) :stream save-file)
+		(write (cons '*goals* *goals*) :stream save-file)
 		(write (cons '*messages* *messages*) :stream save-file)))
 	
 	(defun continue-game ()
 	  "A hairy hack for loading a save game. It's a hairy hack because of CLOS, and I put up with it because of CLOS"
 	  (defun load-object (spec)
 		"Create a new instance of an object with the given print representation"
-		(let ((new-obj (make-instance (car spec))))
-		  (dolist (slot-pair (cdr spec))
-			(cond ((eq (cdr slot-pair) 'unbound) ; This is unbound
-				   (slot-makunbound new-obj (car slot-pair)))
-				  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair)))
-					(member (cadr slot-pair) *class-list*)) ; This is a class we initialized a printer for
-				   (setf (slot-value new-obj (car slot-pair)) (load-object (cdr slot-pair))))
-				  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair)))
-						(not (eq (cadr slot-pair)
-								 'lambda))) ; This is a list of objects like the inventory
-				   (setf (slot-value new-obj (car slot-pair)) nil)
-				   (dolist (new-spec (cdr slot-pair))
-					 (setf (slot-value new-obj (car slot-pair))
-						   (cons (load-object new-spec) (slot-value new-obj (car slot-pair))))))
-				  ((or (atom (cdr slot-pair)) (and (listp (cdr slot-pair)) (eq (cadr slot-pair) 'lambda))) ; This is an atom or a lambda function
-				   (setf (slot-value new-obj (car slot-pair))
-						 (cdr slot-pair)))))
-		  new-obj))
+		(if (not (member (car spec) *class-list*))
+			(car spec)
+			(let ((new-obj (make-instance (car spec))))
+			  (dolist (slot-pair (cdr spec))
+				(cond ((eq (cdr slot-pair) 'unbound) ; This is unbound
+					   (slot-makunbound new-obj (car slot-pair)))
+					  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair)))
+							(member (cadr slot-pair) *class-list*)) ; This is a class we initialized a printer for
+					   (setf (slot-value new-obj (car slot-pair)) (load-object (cdr slot-pair))))
+					  ((and (listp (cdr slot-pair)) (not (null (cdr slot-pair)))
+							(not (eq (cadr slot-pair)
+									 'lambda))) ; This is a list of objects like the inventory
+					   (setf (slot-value new-obj (car slot-pair)) nil)
+					   (dolist (new-spec (cdr slot-pair))
+						 (setf (slot-value new-obj (car slot-pair))
+							   (cons (load-object new-spec) (slot-value new-obj (car slot-pair))))))
+					  ((or (atom (cdr slot-pair)) (and (listp (cdr slot-pair)) (eq (cadr slot-pair) 'lambda))) ; This is an atom or a lambda function
+					   (setf (slot-value new-obj (car slot-pair))
+							 (cdr slot-pair)))))
+			  new-obj)))
 	  
 	  (with-open-file (load-file "phalanx-save.sav"
 								 :direction :input
@@ -1894,6 +2200,7 @@
 					 (error "In file load, could not parse object ~A" temp-obj))))
 			(setf parse-file (read load-file nil 'done))
 			(setf temp-obj nil)))
+		(story 'continue)
 		(resume-game)))
 	
 	(defun process-input (in)
@@ -1913,21 +2220,28 @@
 			 (process-input (cdr (assoc cursor-pos options))))
 			((eq in #\?)
 			 (help)
-			 (main-menu))
+			 (refresh-menu)
+			 t)
 			((or (eq in #\n) (eq in #\N))
 			 (new-game)
 			 nil)
 			((or (eq in #\s) (eq in #\S))
-			 (save-game)
-			 (process-input #\q))
+			 (when (not (null *game-state*))
+			   (save-game)
+			   (setf *game-state* nil)
+			   'quit))
 			((or (eq in #\r) (eq in #\R))
 			 (not (resume-game)))
 			((or (eq in #\c) (eq in #\C))
 			 (continue-game)
 			 nil)
 			((or (eq in #\q) (eq in #\Q))
-			 (setf *game-state* nil)
-			 'quit)
+			 (if (warn-of-impending-doom)
+				 (progn (when (not (null *game-state*))
+						  (delete-file "phalanx-save.sav"))
+						(setf *game-state* nil)
+						'quit)
+				 (refresh-menu)))
 			(t t)))
 	
 	(while t
