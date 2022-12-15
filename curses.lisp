@@ -22,7 +22,7 @@
 (in-package :curses)
 
 (define-foreign-library curses
-  (:unix "libncurses.so.5")
+  (:unix "libncurses.so.6")
   (t (:default "curses")))
 
 ;(eval-when (:compile-toplevel :load-toplevel :execute)

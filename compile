@@ -2,6 +2,7 @@
 
 (load "~/.clisprc.lisp")
 (ql:quickload "asdf")
+(push #p"~/phalanx/" asdf:*central-registry*) ; Change path to phalanx to be appropriate
 (ql:quickload "phalanx")
 (in-package :phalanx)
 (make-exec)
